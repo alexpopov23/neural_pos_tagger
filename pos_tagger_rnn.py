@@ -6,14 +6,17 @@ from nltk.corpus import brown
 import pickle
 import os
 
-embeddings_save_path = "/home/alexander/dev/projects/BAN/word-embeddings/model-en/"
-embeddings_train_data = "/home/alexander/dev/projects/BAN/word-embeddings/text8"
-embeddings_eval_data = "/home/alexander/dev/projects/BAN/word-embeddings/analogies-en.txt"
+#embeddings_save_path = "/home/alexander/dev/projects/BAN/word-embeddings/model-en/"
+embeddings_save_path = "/home/user/dev/neural-pos-tagger/word-embeddings/word-embeddings/model-en/"
+#embeddings_train_data = "/home/alexander/dev/projects/BAN/word-embeddings/text8"
+embeddings_train_data = "/home/user/dev/neural-pos-tagger/word-embeddings/word-embeddings/text8"
+#embeddings_eval_data = "/home/alexander/dev/projects/BAN/word-embeddings/analogies-en.txt"
+embeddings_eval_data = "/home/user/dev/neural-pos-tagger/word-embeddings/word-embeddings/analogies-en.txt"
 pickle_folder = "/home/alexander/dev/projects/BAN/pos_tagger_rnn/Pickled"
 
 # Parameters
 learning_rate = 0.001
-training_iters = 100000
+training_iters = 1000
 batch_size = 128
 
 # Network Parameters
@@ -46,6 +49,8 @@ for label in labels:
     pos_dict[label] = one_hot_pos
 print pos_dict
 
+embeddings = {}
+word_to_embedding = {}
 # convert words to embeddings and shape them according to the expected dimensions
 with tf.Graph().as_default(), tf.Session() as session:
     opts = w2v.Options()
@@ -58,46 +63,53 @@ with tf.Graph().as_default(), tf.Session() as session:
         model.saver.restore(session, ckpt.model_checkpoint_path)
     else:
         print("No valid checkpoint to reload a model was found!")
-    train_data = np.empty([len(train_data_list), seq_width, embedding_size], dtype=float)
-    train_labels = np.empty([len(train_data_list), seq_width, n_classes])
-    valid_data = np.empty([len(valid_data_list), seq_width, embedding_size], dtype=float)
-    valid_labels = np.empty([len(valid_data_list), seq_width, n_classes])
-    test_data = np.empty([len(test_data_list), seq_width, embedding_size], dtype=float)
-    test_labels = np.empty([len(test_data_list), seq_width, n_classes])
-    empty_embedding = embedding_size * [0.0]
-    empty_pos = n_classes * [0]
-    for sent in train_data_list:
-        embeddings = session.run(model._w_in)
-        sent_padded = [embeddings[model._word2id[word]] if word in model._word2id else embeddings[model._word2id["UNK"]] for word,_ in sent] \
-                      + (seq_width-len(sent)) * [empty_embedding]
-        sent_array = np.asarray(sent_padded)
-        train_data[train_data_list.index(sent)] = sent_array
-        train_labels_sent = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos]
-        train_labels[train_data_list.index(sent)] = train_labels_sent
-    #TODO: same for test_data and valid_data, if it works
-    for sent in valid_data_list:
-        embeddings = session.run(model._w_in)
-        sent_padded = [embeddings[model._word2id[word]] if word in model._word2id else embeddings[model._word2id["UNK"]] for word,_ in sent] \
-                      + (seq_width-len(sent)) * [empty_embedding]
-        sent_array = np.asarray(sent_padded)
-        valid_data[valid_data_list.index(sent)] = sent_array
-        valid_labels_sent = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos]
-        valid_labels[valid_data_list.index(sent)] = valid_labels_sent
-    for sent in test_data_list:
-        embeddings = session.run(model._w_in)
-        sent_padded = [embeddings[model._word2id[word]] if word in model._word2id else embeddings[model._word2id["UNK"]] for word,_ in sent] \
-                      + (seq_width-len(sent)) * [empty_embedding]
-        sent_array = np.asarray(sent_padded)
-        test_data[test_data_list.index(sent)] = sent_array
-        test_labels_sent = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos]
-        test_labels[test_data_list.index(sent)] = test_labels_sent
+    embeddings = session.run(model._w_in)
+    word_to_embedding = model._word2id
 
+#train_data = np.empty([len(train_data_list), seq_width, embedding_size], dtype=float)
+#train_labels = np.empty([len(train_data_list), seq_width, n_classes])
+valid_data = np.empty([len(valid_data_list), seq_width, embedding_size], dtype=float)
+valid_labels = np.empty([len(valid_data_list), seq_width, n_classes])
+valid_seq_length = np.empty([len(valid_data_list)], dtype=int)
+test_data = np.empty([len(test_data_list), seq_width, embedding_size], dtype=float)
+test_labels = np.empty([len(test_data_list), seq_width, n_classes])
+test_seq_length = np.empty([len(test_data_list)], dtype=int)
+empty_embedding = embedding_size * [0.0]
+empty_pos = n_classes * [0]
+'''
+for sent in train_data_list:
+    sent_padded = [embeddings[word_to_embedding[word]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+                  + (seq_width-len(sent)) * [empty_embedding]
+    sent_array = np.asarray(sent_padded)
+    train_data[train_data_list.index(sent)] = sent_array
+    train_labels_sent = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos]
+    train_labels[train_data_list.index(sent)] = train_labels_sent
+'''
+for sent in valid_data_list:
+    sent_padded = [embeddings[word_to_embedding[word]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+                  + (seq_width-len(sent)) * [empty_embedding]
+    sent_array = np.asarray(sent_padded)
+    valid_data[valid_data_list.index(sent)] = sent_array
+    valid_labels_sent = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos]
+    valid_labels[valid_data_list.index(sent)] = valid_labels_sent
+    valid_seq_length[valid_data_list.index(sent)] = len(sent)
+for sent in test_data_list:
+    sent_padded = [embeddings[word_to_embedding[word]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+                  + (seq_width-len(sent)) * [empty_embedding]
+    sent_array = np.asarray(sent_padded)
+    test_data[test_data_list.index(sent)] = sent_array
+    test_labels_sent = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos]
+    test_labels[test_data_list.index(sent)] = test_labels_sent
+    test_seq_length[test_data_list.index(sent)] = len(sent)
+
+'''
 pickle.dump(train_data, open(os.path.join(pickle_folder, "train_data.p"), "wb"))
 pickle.dump(train_labels, open(os.path.join(pickle_folder, "train_labels.p"), "wb"))
 pickle.dump(valid_data, open(os.path.join(pickle_folder, "valid_data.p"), "wb"))
 pickle.dump(valid_labels, open(os.path.join(pickle_folder, "valid_labels.p"), "wb"))
 pickle.dump(test_data, open(os.path.join(pickle_folder, "test_data.p"), "wb"))
 pickle.dump(test_labels, open(os.path.join(pickle_folder, "test_labels.p"), "wb"))
+'''
 
 graph = tf.Graph()
 
@@ -105,7 +117,12 @@ with graph.as_default():
 
     tf_train_dataset = tf.placeholder(tf.float32, [batch_size, seq_width, embedding_size])
     tf_train_labels = tf.placeholder(tf.float32, [batch_size, seq_width, n_classes])
-    seq_length = tf.placeholder(tf.int64, [batch_size])
+    tf_train_seq_length = tf.placeholder(tf.int64, [batch_size])
+    tf_valid_dataset = tf.constant(valid_data, tf.float32)
+    tf_valid_seq_length = tf.constant(valid_seq_length, tf.int64)
+    tf_test_dataset = tf.constant(test_data, tf.float32)
+    tf_test_seq_length = tf.constant(test_seq_length, tf.int64)
+
     #inputs = [tf.reshape(i, (batch_size, embedding_size)) for i in tf.split(1, seq_width, tf_train_dataset)]
 
     # Define weights
@@ -149,7 +166,7 @@ with graph.as_default():
 
         return logits
 
-    logits = BiRNN(tf_train_dataset, weights, biases, seq_length)
+    logits = BiRNN(tf_train_dataset, weights, biases, tf_train_seq_length)
     loss = tf.reduce_mean(
       tf.nn.softmax_cross_entropy_with_logits(
         logits, tf.reshape(tf_train_labels, [-1, n_classes])))
@@ -158,15 +175,40 @@ with graph.as_default():
 
      # Predictions for the training, validation, and test data.
     train_prediction = tf.nn.softmax(logits)
-    #valid_prediction = tf.nn.softmax(BiRNN(tf_valid_dataset, weights, biases, seq_length))
-    #test_prediction = tf.nn.softmax(BiRNN(tf_test_dataset, weights, biases, seq_length))
-'''
+    valid_prediction = tf.nn.softmax(BiRNN(tf_valid_dataset, weights, biases, tf_valid_seq_length))
+    test_prediction = tf.nn.softmax(BiRNN(tf_test_dataset, weights, biases, tf_test_seq_length))
+
+def new_batch (offset):
+
+    train_data = np.empty([batch_size, seq_width, embedding_size], dtype=float)
+    train_labels = np.empty([batch_size, seq_width, n_classes])
+    seq_length = np.empty([batch_size])
+    for sent in train_data_list[offset:offset*(offset+batch_size)]:
+        sent_padded = [embeddings[word_to_embedding[word]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+                      + (seq_width-len(sent)) * [empty_embedding]
+        sent_array = np.asarray(sent_padded)
+        train_data[train_data_list.index(sent)] = sent_array
+        train_labels_sent = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos]
+        train_labels[train_data_list.index(sent)] = train_labels_sent
+        seq_length[train_data_list.index(sent)] = len(sent)
+    return train_data, train_labels, seq_length
+
+def accuracy (predictions, labels):
+  return (100.0 * np.sum(np.argmax(predictions, 1) == np.argmax(tf.reshape(labels, [-1, n_classes]), 1))
+          / predictions.shape[0])
+
 with tf.Session(graph=graph) as session:
     tf.initialize_all_variables().run()
     print('Initialized')
-    #TODO
-    # take batch_size of sentences from train_data, lookup embeddings for each word and construct tensor
-    # also, padd every sentence to seq_width with zero vectors
-    #TODO
-    # feed into graph and run session
-'''
+    for step in range(training_iters):
+        offset = (step * batch_size) % (train_data_list.shape[0] - batch_size)
+        batch_data, batch_labels, batch_seq_length = new_batch(offset)
+        feed_dict = {tf_train_dataset : batch_data, tf_train_labels : batch_labels, tf_train_seq_length: batch_seq_length}
+        _, l, predictions = session.run(
+          [optimizer, loss, train_prediction], feed_dict=feed_dict)
+        if (step % 50 == 0):
+          print('Minibatch loss at step %d: %f' % (step, l))
+          print('Minibatch accuracy: %.1f%%' % accuracy(train_prediction, batch_labels))
+          print('Validation accuracy: %.1f%%' % accuracy(
+            valid_prediction.eval(), valid_labels))
+    print('Test accuracy: %.1f%%' % accuracy(test_prediction.eval(), test_labels))
