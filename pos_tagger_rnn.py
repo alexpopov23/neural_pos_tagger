@@ -99,8 +99,6 @@ pickle.dump(valid_labels, open(os.path.join(pickle_folder, "valid_labels.p"), "w
 pickle.dump(test_data, open(os.path.join(pickle_folder, "test_data.p"), "wb"))
 pickle.dump(test_labels, open(os.path.join(pickle_folder, "test_labels.p"), "wb"))
 
-print "Funny stuff"
-
 graph = tf.Graph()
 
 with graph.as_default():
