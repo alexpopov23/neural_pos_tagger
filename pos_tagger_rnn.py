@@ -151,8 +151,10 @@ with graph.as_default():
 
         initializer = tf.random_uniform_initializer(-1,1)
 
-        fw_cell = rnn_cell.LSTMCell(n_hidden, n_hidden, initializer=initializer)
-        bw_cell = rnn_cell.LSTMCell(n_hidden, n_hidden, initializer=initializer)
+        with tf.variable_scope('forward'):
+            fw_cell = rnn_cell.LSTMCell(n_hidden, n_hidden, initializer=initializer)
+        with tf.variable_scope('backward'):
+            bw_cell = rnn_cell.LSTMCell(n_hidden, n_hidden, initializer=initializer)
 
         # Get lstm cell output
         outputs = rnn.bidirectional_rnn(fw_cell, bw_cell, inputs, dtype="float32", sequence_length=_seq_length)
@@ -166,24 +168,26 @@ with graph.as_default():
 
         return logits
 
-    logits = BiRNN(tf_train_dataset, weights, biases, tf_train_seq_length)
-    loss = tf.reduce_mean(
-      tf.nn.softmax_cross_entropy_with_logits(
-        logits, tf.reshape(tf_train_labels, [-1, n_classes])))
+    with tf.variable_scope("BiRNN") as scope:
+        logits = BiRNN(tf_train_dataset, weights, biases, tf_train_seq_length)
+        scope.reuse_variables()
+        loss = tf.reduce_mean(
+          tf.nn.softmax_cross_entropy_with_logits(
+            logits, tf.reshape(tf_train_labels, [-1, n_classes])))
 
-    optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
+        optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
 
-     # Predictions for the training, validation, and test data.
-    train_prediction = tf.nn.softmax(logits)
-    valid_prediction = tf.nn.softmax(BiRNN(tf_valid_dataset, weights, biases, tf_valid_seq_length))
-    test_prediction = tf.nn.softmax(BiRNN(tf_test_dataset, weights, biases, tf_test_seq_length))
+         # Predictions for the training, validation, and test data.
+        train_prediction = tf.nn.softmax(logits)
+        valid_prediction = tf.nn.softmax(BiRNN(tf_valid_dataset, weights, biases, tf_valid_seq_length))
+        test_prediction = tf.nn.softmax(BiRNN(tf_test_dataset, weights, biases, tf_test_seq_length))
 
 def new_batch (offset):
 
     train_data = np.empty([batch_size, seq_width, embedding_size], dtype=float)
     train_labels = np.empty([batch_size, seq_width, n_classes])
     seq_length = np.empty([batch_size])
-    for sent in train_data_list[offset:offset*(offset+batch_size)]:
+    for sent in train_data_list[offset:(offset+batch_size)]:
         sent_padded = [embeddings[word_to_embedding[word]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
                       + (seq_width-len(sent)) * [empty_embedding]
         sent_array = np.asarray(sent_padded)
@@ -194,21 +198,27 @@ def new_batch (offset):
     return train_data, train_labels, seq_length
 
 def accuracy (predictions, labels):
-  return (100.0 * np.sum(np.argmax(predictions, 1) == np.argmax(tf.reshape(labels, [-1, n_classes]), 1))
-          / predictions.shape[0])
+  argmax1 = np.argmax(predictions,1)
+  reshaped_labels = tf.reshape(labels, [-1, n_classes], 1)
+  argmax2 = np.argmax(reshaped_labels,1)
+  comparison = (argmax1 == argmax2)
+  sum = np.sum(comparison, 1)
+  return (100.0 * sum) / predictions.shape[0]
+  #return (100.0 * np.sum(np.argmax(predictions, 1) == np.argmax(tf.reshape(labels, [-1, n_classes]), 1))
+  #        / predictions.shape[0])
 
 with tf.Session(graph=graph) as session:
     tf.initialize_all_variables().run()
     print('Initialized')
     for step in range(training_iters):
-        offset = (step * batch_size) % (train_data_list.shape[0] - batch_size)
+        offset = (step * batch_size) % (len(train_data_list) - batch_size)
         batch_data, batch_labels, batch_seq_length = new_batch(offset)
         feed_dict = {tf_train_dataset : batch_data, tf_train_labels : batch_labels, tf_train_seq_length: batch_seq_length}
         _, l, predictions = session.run(
           [optimizer, loss, train_prediction], feed_dict=feed_dict)
         if (step % 50 == 0):
           print('Minibatch loss at step %d: %f' % (step, l))
-          print('Minibatch accuracy: %.1f%%' % accuracy(train_prediction, batch_labels))
+          print('Minibatch accuracy: %.1f%%' % accuracy(predictions, batch_labels))
           print('Validation accuracy: %.1f%%' % accuracy(
             valid_prediction.eval(), valid_labels))
     print('Test accuracy: %.1f%%' % accuracy(test_prediction.eval(), test_labels))
