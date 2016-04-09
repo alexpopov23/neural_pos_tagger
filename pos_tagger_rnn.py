@@ -16,8 +16,8 @@ embeddings_eval_data = "/home/alexander/dev/projects/BAN/word-embeddings/analogi
 pickle_folder = "/home/alexander/dev/projects/BAN/pos_tagger_rnn/Pickled"
 
 # Parameters
-learning_rate = 0.001
-training_iters = 1000
+learning_rate = 0.01
+training_iters = 100000
 batch_size = 128
 
 # Network Parameters
@@ -34,9 +34,9 @@ test_data_list = data[5000:10000]
 #train_data_list = sorted(data[10000:], key=len)
 train_data_list = data[10000:]
 # only for dev purposes cut out a small slice of the data and use that
-valid_data_list = valid_data_list[:50]
-test_data_list = test_data_list[:50]
-train_data_list = train_data_list[:1000]
+#valid_data_list = valid_data_list[:500]
+#test_data_list = test_data_list[:500]
+#train_data_list = train_data_list[:10000]
 
 print "Length of validation data is " + str(len(valid_data_list))
 print "Length of test data is " + str(len(test_data_list))
@@ -100,7 +100,7 @@ count = 0
 for sent in valid_data_list:
     if len(sent) > 50:
         sent = sent[:50]
-    sent_padded = [embeddings[word_to_embedding[word]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+    sent_padded = [embeddings[word_to_embedding[word.lower()]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
                   + (seq_width-len(sent)) * [empty_embedding]
     sent_array = np.asarray(sent_padded)
     valid_data[count] = sent_array
@@ -108,11 +108,14 @@ for sent in valid_data_list:
     valid_labels[count] = valid_labels_sent
     valid_seq_length[count] = len(sent)
     count+=1
+# switch from [batch_size, steps, embedding_size] to [steps, batch_size, embedding_size]
+#valid_data = np.transpose(valid_data, (1,0,2))
+#valid_labels = np.transpose(valid_labels, (1,0,2))
 count = 0
 for sent in test_data_list:
     if len(sent) > 50:
         sent = sent[:50]
-    sent_padded = [embeddings[word_to_embedding[word]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+    sent_padded = [embeddings[word_to_embedding[word.lower()]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
                   + (seq_width-len(sent)) * [empty_embedding]
     sent_array = np.asarray(sent_padded)
     test_data[count] = sent_array
@@ -120,7 +123,9 @@ for sent in test_data_list:
     test_labels[count] = test_labels_sent
     test_seq_length[count] = len(sent)
     count+=1
-
+# switch from [batch_size, steps, embedding_size] to [steps, batch_size, embedding_size]
+#test_data = np.transpose(test_data, (1,0,2))
+#test_labels = np.transpose(test_labels, (1,0,2))
 '''
 pickle.dump(train_data, open(os.path.join(pickle_folder, "train_data.p"), "wb"))
 pickle.dump(train_labels, open(os.path.join(pickle_folder, "train_labels.p"), "wb"))
@@ -150,6 +155,8 @@ with graph.as_default():
         #'hidden': tf.Variable(tf.random_normal([embedding_size, 2*n_hidden])),
         'hidden': tf.Variable(tf.random_normal([embedding_size, n_hidden])),
         'out': tf.Variable(tf.random_normal([2*n_hidden, n_classes]))
+        #'hidden': tf.truncated_normal([embedding_size, n_hidden], stddev=0.0517),
+        #'out': tf.truncated_normal([2*n_hidden, n_classes], stddev=0.1632)
     }
     biases = {
         #'hidden': tf.Variable(tf.random_normal([2*n_hidden])),
@@ -177,6 +184,7 @@ with graph.as_default():
 
         # Get lstm cell output
         outputs = rnn.bidirectional_rnn(fw_cell, bw_cell, inputs, dtype="float32", sequence_length=_seq_length)
+        outputs_tensor = tf.reshape(tf.concat(1, outputs),[-1, 2*n_hidden])
 
         logits = []
 
@@ -185,21 +193,21 @@ with graph.as_default():
             logits.append(tf.nn.softmax(final_transformed_val))
         logits = tf.reshape(tf.concat(1, logits), [-1, n_classes])
 
-        return logits
+        return logits, outputs_tensor
 
     with tf.variable_scope("BiRNN") as scope:
-        logits = BiRNN(tf_train_dataset, weights, biases, tf_train_seq_length)
+        logits, _outputs = BiRNN(tf_train_dataset, weights, biases, tf_train_seq_length)
         scope.reuse_variables()
         loss = tf.reduce_mean(
           tf.nn.softmax_cross_entropy_with_logits(
-            logits, tf.reshape(tf_train_labels, [-1, n_classes])))
+            logits, tf.reshape(tf.transpose(tf_train_labels, [1,0,2]), [-1, n_classes])))
 
         optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
 
          # Predictions for the training, validation, and test data.
         train_prediction = tf.nn.softmax(logits)
-        valid_prediction = tf.nn.softmax(BiRNN(tf_valid_dataset, weights, biases, tf_valid_seq_length))
-        test_prediction = tf.nn.softmax(BiRNN(tf_test_dataset, weights, biases, tf_test_seq_length))
+        valid_prediction = tf.nn.softmax(BiRNN(tf_valid_dataset, weights, biases, tf_valid_seq_length)[0])
+        test_prediction = tf.nn.softmax(BiRNN(tf_test_dataset, weights, biases, tf_test_seq_length)[0])
 
 def new_batch (offset):
 
@@ -211,7 +219,7 @@ def new_batch (offset):
     for sent in batch:
         if len(sent) > 50:
             sent = sent[:50]
-        sent_padded = [embeddings[word_to_embedding[word]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+        sent_padded = [embeddings[word_to_embedding[word.lower()]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
                       + (seq_width-len(sent)) * [empty_embedding]
         sent_array = np.asarray(sent_padded)
         train_data[count] = sent_array
@@ -219,20 +227,23 @@ def new_batch (offset):
         train_labels[count] = train_labels_sent
         seq_length[count] = len(sent)
         count+=1
+    # switch from [batch_size, steps, embedding_size] to [steps, batch_size, embedding_size]
+    #train_data = np.transpose(train_data, (1,0,2))
+    #train_labels = np.transpose(train_labels, (1,0,2))
     return train_data, train_labels, seq_length
 
 def accuracy (predictions, labels):
-  '''
+
   argmax1 = np.argmax(predictions,1)
   #reshaped_labels = tf.reshape(labels, [-1, n_classes])
-  reshaped_labels = np.reshape(labels, (-1,n_classes))
+  reshaped_labels = np.reshape(np.transpose(labels, (1,0,2)), (-1,n_classes))
   argmax2 = np.argmax(reshaped_labels,1)
   comparison = (argmax1 == argmax2)
   sum = np.sum(comparison)
   return (100.0 * sum) / predictions.shape[0]
-  '''
-  return (100.0 * np.sum(np.argmax(predictions, 1) == np.argmax(np.reshape(labels, (-1, n_classes)), 1))
-          / predictions.shape[0])
+
+  #return (100.0 * np.sum(np.argmax(predictions, 1) == np.argmax(np.reshape(labels, (-1, n_classes)), 1))
+  #        / predictions.shape[0])
 
 with tf.Session(graph=graph) as session:
     tf.initialize_all_variables().run()
@@ -241,11 +252,11 @@ with tf.Session(graph=graph) as session:
         offset = (step * batch_size) % (len(train_data_list) - batch_size)
         batch_data, batch_labels, batch_seq_length = new_batch(offset)
         feed_dict = {tf_train_dataset : batch_data, tf_train_labels : batch_labels, tf_train_seq_length: batch_seq_length}
-        _, l, predictions = session.run(
-          [optimizer, loss, train_prediction], feed_dict=feed_dict)
+        _, l, predictions, outputs = session.run(
+          [optimizer, loss, train_prediction, _outputs], feed_dict=feed_dict)
         if (step % 50 == 0):
           print 'Minibatch loss at step ' + str(step) + ': ' + str(l)
           print 'Minibatch accuracy: ' + str(accuracy(predictions, batch_labels))
-          print('Validation accuracy: %.1f%%' % accuracy(
+          print 'Validation accuracy: ' + str(accuracy(
             valid_prediction.eval(), valid_labels))
-    print('Test accuracy: %.1f%%' % accuracy(test_prediction.eval(), test_labels))
+    print 'Test accuracy: ' + str(accuracy(test_prediction.eval(), test_labels))
