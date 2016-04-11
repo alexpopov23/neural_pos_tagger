@@ -71,6 +71,7 @@ with tf.Graph().as_default(), tf.Session() as session:
         print("No valid checkpoint to reload a model was found!")
     embeddings = session.run(model._w_in)
     word_to_embedding = model._word2id
+    embeddings = tf.nn.l2_normalize(embeddings, 1).eval()
     #pickle.dump(embeddings, open(os.path.join(pickle_folder, "embedding_vectors.p"), "wb"))
     #pickle.dump(word_to_embedding, open(os.path.join(pickle_folder, "word_to_embedding.p"), "wb"))
 
@@ -153,10 +154,10 @@ with graph.as_default():
     weights = {
         # Hidden layer weights => 2*n_hidden because of foward + backward cells
         #'hidden': tf.Variable(tf.random_normal([embedding_size, 2*n_hidden])),
-        'hidden': tf.Variable(tf.random_normal([embedding_size, n_hidden])),
-        'out': tf.Variable(tf.random_normal([2*n_hidden, n_classes]))
-        #'hidden': tf.truncated_normal([embedding_size, n_hidden], stddev=0.0517),
-        #'out': tf.truncated_normal([2*n_hidden, n_classes], stddev=0.1632)
+        #'hidden': tf.Variable(tf.random_normal([embedding_size, n_hidden])),
+        #'out': tf.Variable(tf.random_normal([2*n_hidden, n_classes])),
+        'hidden': tf.truncated_normal([embedding_size, n_hidden], stddev=0.1),
+        'out': tf.truncated_normal([2*n_hidden, n_classes], stddev=0.0883)
     }
     biases = {
         #'hidden': tf.Variable(tf.random_normal([2*n_hidden])),
