@@ -101,7 +101,20 @@ count = 0
 for sent in valid_data_list:
     if len(sent) > 50:
         sent = sent[:50]
-    sent_padded = [embeddings[word_to_embedding[word.lower()]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+    # for debugging:
+    '''
+    sent_padded = []
+    for word,_ in sent:
+        if word in word_to_embedding:
+            position_in_vocab = word_to_embedding[word.lower()]
+            vector = embeddings[position_in_vocab]
+        else:
+            position_in_vocab = word_to_embedding['UNK']
+            vector = embeddings[position_in_vocab]
+            sent_padded += vector
+    sent_padded += (seq_width-len(sent)) * [empty_embedding]
+    '''
+    sent_padded = [embeddings[word_to_embedding[word.lower()]] if word.lower() in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
                   + (seq_width-len(sent)) * [empty_embedding]
     sent_array = np.asarray(sent_padded)
     valid_data[count] = sent_array
@@ -116,7 +129,7 @@ count = 0
 for sent in test_data_list:
     if len(sent) > 50:
         sent = sent[:50]
-    sent_padded = [embeddings[word_to_embedding[word.lower()]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+    sent_padded = [embeddings[word_to_embedding[word.lower()]] if word.lower() in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
                   + (seq_width-len(sent)) * [empty_embedding]
     sent_array = np.asarray(sent_padded)
     test_data[count] = sent_array
@@ -165,7 +178,7 @@ with graph.as_default():
         'out': tf.Variable(tf.random_normal([n_classes]))
     }
 
-    def BiRNN (inputs, _weights, _biases, _seq_length):
+    def BiRNN (inputs, _seq_length):
 
         # input shape: (batch_size, seq_width, embedding_size)
         inputs = tf.transpose(inputs, [1, 0, 2])
@@ -179,25 +192,28 @@ with graph.as_default():
         initializer = tf.random_uniform_initializer(-1,1)
 
         with tf.variable_scope('forward'):
-            fw_cell = rnn_cell.LSTMCell(n_hidden, n_hidden, initializer=initializer)
+            fw_cell = rnn_cell.LSTMCell(n_hidden, n_hidden, initializer=initializer, cell_clip=1)
+            #fw_cell = rnn_cell.BasicLSTMCell(n_hidden, forget_bias=1.0)
         with tf.variable_scope('backward'):
-            bw_cell = rnn_cell.LSTMCell(n_hidden, n_hidden, initializer=initializer)
+            bw_cell = rnn_cell.LSTMCell(n_hidden, n_hidden, initializer=initializer, cell_clip=1)
+            #bw_cell = rnn_cell.BasicLSTMCell(n_hidden, forget_bias=1.0)
 
         # Get lstm cell output
-        outputs = rnn.bidirectional_rnn(fw_cell, bw_cell, inputs, dtype="float32", sequence_length=_seq_length)
-        outputs_tensor = tf.reshape(tf.concat(1, outputs),[-1, 2*n_hidden])
+        outputs,_,_ = rnn.bidirectional_rnn(fw_cell, bw_cell, inputs, dtype="float32", sequence_length=_seq_length)
+        outputs_tensor = tf.reshape(tf.concat(0, outputs),[-1, 2*n_hidden])
 
         logits = []
 
         for i in xrange(len(outputs)):
             final_transformed_val = tf.matmul(outputs[i],weights['out']) + biases['out']
-            logits.append(tf.nn.softmax(final_transformed_val))
-        logits = tf.reshape(tf.concat(1, logits), [-1, n_classes])
+            logits.append(final_transformed_val)
+        logits = tf.reshape(tf.concat(0, logits), [-1, n_classes])
+        #logits = tf.reshape(logits, [-1, n_classes])
 
         return logits, outputs_tensor
 
     with tf.variable_scope("BiRNN") as scope:
-        logits, _outputs = BiRNN(tf_train_dataset, weights, biases, tf_train_seq_length)
+        logits, _outputs_tensor = BiRNN(tf_train_dataset, tf_train_seq_length)
         scope.reuse_variables()
         loss = tf.reduce_mean(
           tf.nn.softmax_cross_entropy_with_logits(
@@ -207,8 +223,8 @@ with graph.as_default():
 
          # Predictions for the training, validation, and test data.
         train_prediction = tf.nn.softmax(logits)
-        valid_prediction = tf.nn.softmax(BiRNN(tf_valid_dataset, weights, biases, tf_valid_seq_length)[0])
-        test_prediction = tf.nn.softmax(BiRNN(tf_test_dataset, weights, biases, tf_test_seq_length)[0])
+        valid_prediction = tf.nn.softmax(BiRNN(tf_valid_dataset, tf_valid_seq_length)[0])
+        test_prediction = tf.nn.softmax(BiRNN(tf_test_dataset, tf_test_seq_length)[0])
 
 def new_batch (offset):
 
@@ -220,7 +236,7 @@ def new_batch (offset):
     for sent in batch:
         if len(sent) > 50:
             sent = sent[:50]
-        sent_padded = [embeddings[word_to_embedding[word.lower()]] if word in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+        sent_padded = [embeddings[word_to_embedding[word.lower()]] if word.lower() in word_to_embedding else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
                       + (seq_width-len(sent)) * [empty_embedding]
         sent_array = np.asarray(sent_padded)
         train_data[count] = sent_array
@@ -252,9 +268,10 @@ with tf.Session(graph=graph) as session:
     for step in range(training_iters):
         offset = (step * batch_size) % (len(train_data_list) - batch_size)
         batch_data, batch_labels, batch_seq_length = new_batch(offset)
+        batch_seq_length = batch_size * [2]
         feed_dict = {tf_train_dataset : batch_data, tf_train_labels : batch_labels, tf_train_seq_length: batch_seq_length}
-        _, l, predictions, outputs = session.run(
-          [optimizer, loss, train_prediction, _outputs], feed_dict=feed_dict)
+        _, l, predictions, outputs_tensor = session.run(
+          [optimizer, loss, train_prediction, _outputs_tensor], feed_dict=feed_dict)
         if (step % 50 == 0):
           print 'Minibatch loss at step ' + str(step) + ': ' + str(l)
           print 'Minibatch accuracy: ' + str(accuracy(predictions, batch_labels))
