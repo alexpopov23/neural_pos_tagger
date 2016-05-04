@@ -17,7 +17,7 @@ embeddings_eval_data = "/home/alexander/dev/projects/BAN/word-embeddings/analogi
 
 ''' Network Parameters '''
 learning_rate = 0.1 # Update rate for the weights
-training_iters = 100000 # Number of training steps
+training_iters = 10000 # Number of training steps
 batch_size = 128 # Number of sentences passed to the network in one batch
 seq_width = 50 # Max sentence length (longer sentences are cut to this length)
 n_hidden = 128 # Number of features/neurons in the hidden layer
@@ -186,11 +186,17 @@ with graph.as_default():
           tf.nn.softmax_cross_entropy_with_logits(
             logits, tf.reshape(tf.transpose(tf_train_labels, [1,0,2]), [-1, n_classes])))
 
+        # try out a decaying learning rate
+        global_step = tf.Variable(0)  # count the number of steps taken.
+        learning_rate = tf.train.exponential_decay(0.3, global_step, 3500, 0.86, staircase=True)
+
         # calculate gradients, clip them and update model in separate steps
         optimizer = tf.train.GradientDescentOptimizer(learning_rate)
         gradients = optimizer.compute_gradients(loss)
-        capped_gradients = [(tf.clip_by_value(grad, -1, 1), var) for grad, var in gradients]
-        optimizer_t = optimizer.apply_gradients(capped_gradients)
+        capped_gradients = [(tf.clip_by_value(grad, -1, 1), var) for grad, var in gradients if grad!=None]
+        optimizer_t = optimizer.apply_gradients(capped_gradients, global_step=global_step)
+        #optimizer_t = optimizer.apply_gradients(capped_gradients)
+
 
         # calculate gradients and update model in one step
         #optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
