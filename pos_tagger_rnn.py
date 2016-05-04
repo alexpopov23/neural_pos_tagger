@@ -127,14 +127,14 @@ with graph.as_default():
     weights = {
         #'hidden': tf.Variable(tf.random_normal([embedding_size, 2*n_hidden])),
         #'hidden': tf.Variable(tf.random_normal([embedding_size, n_hidden])),
-        'hidden': tf.truncated_normal([embedding_size, n_hidden], stddev=0.1),
+        #'hidden': tf.truncated_normal([embedding_size, n_hidden], stddev=0.1),
         # Out layer weights => 2*n_hidden because of concatenating outputs of foward + backward cells
-        #'out': tf.Variable(tf.random_normal([2*n_hidden, n_classes]))
-        'out': tf.truncated_normal([2*n_hidden, n_classes], stddev=0.0883)
+        'out': tf.Variable(tf.random_normal([2*n_hidden, n_classes]))
+        #'out': tf.Variable(tf.truncated_normal([2*n_hidden, n_classes], stddev=0.0883))
     }
     biases = {
         #'hidden': tf.Variable(tf.random_normal([2*n_hidden])),
-        'hidden': tf.Variable(tf.random_normal([n_hidden])),
+        #'hidden': tf.Variable(tf.random_normal([n_hidden])),
         'out': tf.Variable(tf.random_normal([n_classes]))
     }
 
@@ -186,7 +186,14 @@ with graph.as_default():
           tf.nn.softmax_cross_entropy_with_logits(
             logits, tf.reshape(tf.transpose(tf_train_labels, [1,0,2]), [-1, n_classes])))
 
-        optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
+        # calculate gradients, clip them and update model in separate steps
+        optimizer = tf.train.GradientDescentOptimizer(learning_rate)
+        gradients = optimizer.compute_gradients(loss)
+        capped_gradients = [(tf.clip_by_value(grad, -1, 1), var) for grad, var in gradients]
+        optimizer_t = optimizer.apply_gradients(capped_gradients)
+
+        # calculate gradients and update model in one step
+        #optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
 
          # Predictions for the training, validation, and test data.
         train_prediction = tf.nn.softmax(logits)
@@ -251,7 +258,7 @@ with tf.Session(graph=graph) as session:
         #batch_seq_length = batch_size * [2]
         feed_dict = {tf_train_dataset : batch_data, tf_train_labels : batch_labels, tf_train_seq_length: batch_seq_length}
         _, l, predictions, outputs_tensor = session.run(
-          [optimizer, loss, train_prediction, _outputs_tensor], feed_dict=feed_dict)
+          [optimizer_t, loss, train_prediction, _outputs_tensor], feed_dict=feed_dict)
         if (step % 50 == 0):
           print 'Minibatch loss at step ' + str(step) + ': ' + str(l)
           print 'Minibatch accuracy: ' + str(accuracy(predictions, batch_labels))
