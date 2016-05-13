@@ -1,9 +1,15 @@
 import tensorflow as tf
 import numpy as np
+import pickle
+import os
+import memory_profiler
+import random
 from tensorflow.models.rnn import rnn, rnn_cell
 import word2vec_optimized_utf8 as w2v
 from nltk.corpus import brown
 import BTBReader
+import morphological_dictionary
+
 
 ''' Path to gold corpus (if set to "brown", use the nltk data) '''
 gold_data = "/home/alexander/dev/projects/BAN/pos_tagger_rnn/BTB_pos_gold"
@@ -11,31 +17,35 @@ gold_data = "/home/alexander/dev/projects/BAN/pos_tagger_rnn/BTB_pos_gold"
 
 
 ''' Paths to the embeddings model '''
-embeddings_save_path = "/home/alexander/dev/projects/BAN/word-embeddings/model-bg-10-05-wordforms-size200-30iters" # Bulgarian embeddings (wordforms, ~220mil)
+embeddings_save_path = "/home/alexander/dev/projects/BAN/word-embeddings/model_wiki_news_lemmatized" # Bulgarian embeddings (wordforms, ~220mil)
 #embeddings_save_path = "/home/alexander/dev/projects/BAN/word-embeddings/model-en/"
 #embeddings_save_path = "/home/user/dev/neural-pos-tagger/word-embeddings/word-embeddings/model-en/"
-embeddings_train_data = "/home/alexander/dev/projects/BAN/word-embeddings/Corpora_03.05.16/corpus_wordforms.txt"
+embeddings_train_data = "/home/alexander/dev/projects/BAN/word-embeddings/wikipedia_news.txt"
 #embeddings_train_data = "/home/alexander/dev/projects/BAN/word-embeddings/text8"
 #embeddings_train_data = "/home/user/dev/neural-pos-tagger/word-embeddings/word-embeddings/text8"
 embeddings_eval_data = "/home/alexander/dev/projects/BAN/word-embeddings/analogies-en.txt"
 #embeddings_eval_data = "/home/user/dev/neural-pos-tagger/word-embeddings/word-embeddings/analogies-en.txt"
 
+''' Path to morphological dictionary '''
+path_to_dict = "/home/alexander/dev/projects/BAN/resources/morphology/MorphoDictionary/"
+morpho_dict = morphological_dictionary.get_morpho_dict(path_to_dict)
+
 ''' Network Parameters '''
 learning_rate = 0.3 # Update rate for the weights
-training_iters = 10000 # Number of training steps
+training_iters = 1000 # Number of training steps
 batch_size = 128 # Number of sentences passed to the network in one batch
 seq_width = 50 # Max sentence length (longer sentences are cut to this length)
 n_hidden = 100 # Number of features/neurons in the hidden layer
 #n_classes = 12 # Number of tags in the universal tagset in nltk
-n_classes = 153 # Number of tags in BTB corpus
+n_classes = 12 # Number of tags in BTB corpus
 embedding_size = 200 # Size of the word embedding vectors
 
 ''' Get the training/validation/test data '''
 if gold_data == "brown":
     data = brown.tagged_sents(tagset='universal') # Get the Brown POS-tagged corpus from nltk
 else:
-    data, pos_tags = BTBReader.get_tagged_sentences(gold_data, True, False)
-#random.shuffle(data)
+    data, pos_tags = BTBReader.get_tagged_sentences(gold_data, False, True)
+random.shuffle(data)
 print len(pos_tags)
 #valid_data_list = sorted(data[:5000], key=len) # Optionally, sort the sentences by length
 valid_data_list = data[:3500]
@@ -97,9 +107,29 @@ for count, sent in enumerate(valid_data_list):
     if len(sent) > 50:
         sent = sent[:50]
     # Create a [seq_width, embedding_size]-shaped array, pad it with empty vectors when necessary
-    sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
+    '''
+    sent_padded = [embeddings[word_to_embedding[word.lower()]] if word.lower() in word_to_embedding
                    else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
                   + (seq_width-len(sent)) * [empty_embedding]
+    '''
+    # Use lemmas of words, or their mean vectors if multiple lemmas found
+    sent_padded = []
+    for word,_ in sent:
+        final_lemma = np.zeros(embedding_size)
+        word = word.lower().encode("utf8")
+        if word in morpho_dict:
+            lemmas = morpho_dict[word]
+            if len(lemmas) > 0:
+                for lemma in lemmas:
+                    final_lemma = np.add(final_lemma, embeddings[word_to_embedding[lemma]] if lemma in word_to_embedding else embeddings[word_to_embedding["UNK"]])
+                final_lemma = final_lemma/len(lemmas)
+            else:
+                final_lemma = embeddings[word_to_embedding["UNK"]]
+        else:
+            final_lemma = embeddings[word_to_embedding["UNK"]]
+        sent_padded.append(final_lemma)
+    sent_padded = sent_padded + (seq_width-len(sent)) * [empty_embedding]
+
     sent_array = np.asarray(sent_padded)
     valid_data[count] = sent_array
     sent_labels = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos] # Padded vector with POS
@@ -113,9 +143,29 @@ test_seq_length = np.empty([len(test_data_list)], dtype=int)
 for count, sent in enumerate(test_data_list):
     if len(sent) > 50:
         sent = sent[:50]
-    sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
+    '''
+    sent_padded = [embeddings[word_to_embedding[word.lower()]] if word.lower() in word_to_embedding
                    else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
                   + (seq_width-len(sent)) * [empty_embedding]
+    '''
+    # Use lemmas of words, or their mean vectors if multiple lemmas found
+    sent_padded = []
+    for word,_ in sent:
+        final_lemma = np.zeros(embedding_size)
+        word = word.lower().encode("utf8")
+        if word in morpho_dict:
+            lemmas = morpho_dict[word]
+            if len(lemmas) > 0:
+                for lemma in lemmas:
+                    final_lemma = np.add(final_lemma, embeddings[word_to_embedding[lemma]] if lemma in word_to_embedding else embeddings[word_to_embedding["UNK"]])
+                final_lemma = final_lemma/len(lemmas)
+            else:
+                final_lemma = embeddings[word_to_embedding["UNK"]]
+        else:
+            final_lemma = embeddings[word_to_embedding["UNK"]]
+        sent_padded.append(final_lemma)
+    sent_padded = sent_padded + (seq_width-len(sent)) * [empty_embedding]
+
     sent_array = np.asarray(sent_padded)
     test_data[count] = sent_array
     sent_labels = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos]
@@ -165,15 +215,9 @@ with graph.as_default():
 
         with tf.variable_scope('forward'):
             #fw_cell = rnn_cell.BasicLSTMCell(n_hidden, forget_bias=1.0)
-            #lstm1 = rnn_cell.LSTMCell(n_hidden, embedding_size, initializer=initializer)
-            #lstm2 = rnn_cell.LSTMCell(n_hidden, embedding_size, initializer=initializer)
-            #fw_cell = rnn_cell.MultiRNNCell([lstm1, lstm2])
             fw_cell = rnn_cell.LSTMCell(n_hidden, embedding_size, initializer=initializer)
         with tf.variable_scope('backward'):
             #bw_cell = rnn_cell.BasicLSTMCell(n_hidden, forget_bias=1.0)
-            #lstm3 = rnn_cell.LSTMCell(n_hidden, embedding_size, initializer=initializer)
-            #lstm4 = rnn_cell.LSTMCell(n_hidden, embedding_size, initializer=initializer)
-            #bw_cell = rnn_cell.MultiRNNCell([lstm3, lstm4])
             bw_cell = rnn_cell.LSTMCell(n_hidden, embedding_size, initializer=initializer)
 
         # Get lstm cell output
@@ -233,9 +277,29 @@ def new_batch (offset):
     for count, sent in enumerate(batch):
         if len(sent) > 50:
             sent = sent[:50]
-        sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
+        '''
+        sent_padded = [embeddings[word_to_embedding[word.lower()]] if word.lower() in word_to_embedding
                        else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
                       + (seq_width-len(sent)) * [empty_embedding]
+        '''
+        # Use lemmas of words, or their mean vectors if multiple lemmas found
+        sent_padded = []
+        for word,_ in sent:
+            final_lemma = np.zeros(embedding_size)
+            word = word.lower().encode("utf8")
+            if word in morpho_dict:
+                lemmas = morpho_dict[word]
+                if len(lemmas) > 0:
+                    for lemma in lemmas:
+                        final_lemma = np.add(final_lemma, embeddings[word_to_embedding[lemma]] if lemma in word_to_embedding else embeddings[word_to_embedding["UNK"]])
+                    final_lemma = final_lemma/len(lemmas)
+                else:
+                    final_lemma = embeddings[word_to_embedding["UNK"]]
+            else:
+                final_lemma = embeddings[word_to_embedding["UNK"]]
+            sent_padded.append(final_lemma)
+        sent_padded = sent_padded + (seq_width-len(sent)) * [empty_embedding]
+
         sent_array = np.asarray(sent_padded)
         train_data[count] = sent_array
         train_labels_sent = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos]

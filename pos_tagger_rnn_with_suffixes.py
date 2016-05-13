@@ -1,9 +1,14 @@
+# -*- coding: UTF-8 -*-
+
 import tensorflow as tf
 import numpy as np
+import random
 from tensorflow.models.rnn import rnn, rnn_cell
 import word2vec_optimized_utf8 as w2v
 from nltk.corpus import brown
 import BTBReader
+from word_to_suffix import get_suffix
+
 
 ''' Path to gold corpus (if set to "brown", use the nltk data) '''
 gold_data = "/home/alexander/dev/projects/BAN/pos_tagger_rnn/BTB_pos_gold"
@@ -20,6 +25,11 @@ embeddings_train_data = "/home/alexander/dev/projects/BAN/word-embeddings/Corpor
 embeddings_eval_data = "/home/alexander/dev/projects/BAN/word-embeddings/analogies-en.txt"
 #embeddings_eval_data = "/home/user/dev/neural-pos-tagger/word-embeddings/word-embeddings/analogies-en.txt"
 
+''' Paths to the suffix-embeddings model '''
+suff_embeddings_save_path = "/home/alexander/dev/projects/BAN/suffix-embeddings/model-03.05.16_20iters"
+suff_embeddings_train_data = "/home/alexander/dev/projects/BAN/suffix-embeddings/SuffixData.txt"
+suff_embeddings_eval_data = "/home/alexander/dev/projects/BAN/word-embeddings/analogies-en.txt"
+
 ''' Network Parameters '''
 learning_rate = 0.3 # Update rate for the weights
 training_iters = 10000 # Number of training steps
@@ -28,14 +38,17 @@ seq_width = 50 # Max sentence length (longer sentences are cut to this length)
 n_hidden = 100 # Number of features/neurons in the hidden layer
 #n_classes = 12 # Number of tags in the universal tagset in nltk
 n_classes = 153 # Number of tags in BTB corpus
-embedding_size = 200 # Size of the word embedding vectors
+word_embedding_size = 200 # Size of the word embedding vector + the suffix embedding vector
+suff_embedding_size = 50
+concat_embedding_size = word_embedding_size + suff_embedding_size
+
 
 ''' Get the training/validation/test data '''
 if gold_data == "brown":
     data = brown.tagged_sents(tagset='universal') # Get the Brown POS-tagged corpus from nltk
 else:
     data, pos_tags = BTBReader.get_tagged_sentences(gold_data, True, False)
-#random.shuffle(data)
+random.shuffle(data)
 print len(pos_tags)
 #valid_data_list = sorted(data[:5000], key=len) # Optionally, sort the sentences by length
 valid_data_list = data[:3500]
@@ -70,12 +83,13 @@ word_to_embedding = {} # Dictionary for the mapping between word strings and cor
 Convert words to embeddings and shape them according to the expected dimensions
 Use word2vec_optimized and load model from stored data
 '''
+
 with tf.Graph().as_default(), tf.Session() as session:
     opts = w2v.Options()
     opts.train_data = embeddings_train_data
     opts.eval_data = embeddings_eval_data
     opts.save_path = embeddings_save_path
-    opts.emb_dim = embedding_size
+    opts.emb_dim = word_embedding_size
     model = w2v.Word2Vec(opts, session)
     ckpt = tf.train.get_checkpoint_state(embeddings_save_path)
     if ckpt and ckpt.model_checkpoint_path:
@@ -86,20 +100,71 @@ with tf.Graph().as_default(), tf.Session() as session:
     word_to_embedding = model._word2id
     embeddings = tf.nn.l2_normalize(embeddings, 1).eval()
 
-empty_embedding = embedding_size * [0.0] # Empty embedding vector, used for padding
+'''
+Convert suffixes to embeddings and shape them according to the expected dimensions
+Use word2vec_optimized and load model from stored data
+'''
+suff_embeddings = {}
+suff_to_embedding = {}
+
+with tf.Graph().as_default(), tf.Session() as session:
+    opts = w2v.Options()
+    opts.train_data = suff_embeddings_train_data
+    opts.eval_data = suff_embeddings_eval_data
+    opts.save_path = suff_embeddings_save_path
+    opts.emb_dim = suff_embedding_size
+    model = w2v.Word2Vec(opts, session)
+    ckpt = tf.train.get_checkpoint_state(suff_embeddings_save_path)
+    if ckpt and ckpt.model_checkpoint_path:
+        model.saver.restore(session, ckpt.model_checkpoint_path)
+    else:
+        print("No valid checkpoint to reload a model was found!")
+    suff_embeddings = session.run(model._w_in)
+    suff_to_embedding = model._word2id
+    suff_embeddings = tf.nn.l2_normalize(suff_embeddings, 1).eval()
+
+
+empty_embedding = concat_embedding_size * [0.0] # Empty embedding vector, used for padding
 empty_pos = n_classes * [0] # Empty one-hot pos representation vector, used for padding
 
 ''' Set up validation data '''
-valid_data = np.empty([len(valid_data_list), seq_width, embedding_size], dtype=float)
+valid_data = np.empty([len(valid_data_list), seq_width, concat_embedding_size], dtype=float)
 valid_labels = np.empty([len(valid_data_list), seq_width, n_classes])
 valid_seq_length = np.empty([len(valid_data_list)], dtype=int)
 for count, sent in enumerate(valid_data_list):
     if len(sent) > 50:
         sent = sent[:50]
     # Create a [seq_width, embedding_size]-shaped array, pad it with empty vectors when necessary
-    sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
-                   else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+
+    sent_padded = [np.concatenate((embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
+                   else embeddings[word_to_embedding["UNK"]],
+                               suff_embeddings[suff_to_embedding[get_suffix(word).encode("utf8")]] if get_suffix(word).encode("utf8") in suff_embeddings
+                   else suff_embeddings[suff_to_embedding["UNK"]])) for word,_ in sent] \
                   + (seq_width-len(sent)) * [empty_embedding]
+
+    ''' use suffix embeddings only '''
+    '''
+    sent_padded = [suff_embeddings[suff_to_embedding[get_suffix(word)]] if get_suffix(word) in suff_embeddings
+                   else suff_embeddings[suff_to_embedding["UNK"]] for word,_ in sent] \
+                  + (seq_width-len(sent)) * [empty_embedding]
+    '''
+    ''' For debugging '''
+    '''
+    sent_padded = []
+    for word,_ in sent:
+        if word.lower() in word_to_embedding:
+            word_embeding = embeddings[word_to_embedding[word.lower()]]
+        else:
+            word_embedding = embeddings[word_to_embedding["UNK"]]
+        if get_suffix(word) in suff_embeddings:
+            suffix_embedding = suff_embeddings[suff_to_embedding[get_suffix(word)]]
+        else:
+            suffix_embedding = suff_embeddings[suff_to_embedding["UNK"]]
+        embedding = np.concatenate((word_embedding, suffix_embedding))
+        sent_padded.append(embedding)
+    sent_padded += (seq_width-len(sent)) * [empty_embedding]
+    '''
+
     sent_array = np.asarray(sent_padded)
     valid_data[count] = sent_array
     sent_labels = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos] # Padded vector with POS
@@ -107,15 +172,24 @@ for count, sent in enumerate(valid_data_list):
     valid_seq_length[count] = len(sent) # Record the length of the sentence, needed for the RNN cell
 
 ''' Set up test data '''
-test_data = np.empty([len(test_data_list), seq_width, embedding_size], dtype=float)
+test_data = np.empty([len(test_data_list), seq_width, concat_embedding_size], dtype=float)
 test_labels = np.empty([len(test_data_list), seq_width, n_classes])
 test_seq_length = np.empty([len(test_data_list)], dtype=int)
 for count, sent in enumerate(test_data_list):
     if len(sent) > 50:
         sent = sent[:50]
-    sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
-                   else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+
+    sent_padded = [np.concatenate((embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
+                   else embeddings[word_to_embedding["UNK"]],
+                                suff_embeddings[suff_to_embedding[get_suffix(word).encode("utf8")]] if get_suffix(word).encode("utf8") in suff_embeddings
+                   else suff_embeddings[suff_to_embedding["UNK"]])) for word,_ in sent] \
                   + (seq_width-len(sent)) * [empty_embedding]
+
+    '''
+    sent_padded = [suff_embeddings[suff_to_embedding[get_suffix(word)]] if get_suffix(word) in suff_embeddings
+                   else suff_embeddings[suff_to_embedding["UNK"]] for word,_ in sent] \
+                  + (seq_width-len(sent)) * [empty_embedding]
+    '''
     sent_array = np.asarray(sent_padded)
     test_data[count] = sent_array
     sent_labels = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos]
@@ -126,7 +200,7 @@ for count, sent in enumerate(test_data_list):
 graph = tf.Graph()
 with graph.as_default():
 
-    tf_train_dataset = tf.placeholder(tf.float32, [batch_size, seq_width, embedding_size])
+    tf_train_dataset = tf.placeholder(tf.float32, [batch_size, seq_width, concat_embedding_size])
     tf_train_labels = tf.placeholder(tf.float32, [batch_size, seq_width, n_classes])
     tf_train_seq_length = tf.placeholder(tf.int64, [batch_size])
     tf_valid_dataset = tf.constant(valid_data, tf.float32)
@@ -155,7 +229,7 @@ with graph.as_default():
         # input shape: (batch_size, seq_width, embedding_size) ==> (seq_width, batch_size, embedding_size)
         inputs = tf.transpose(inputs, [1, 0, 2])
         # Reshape before feeding to hidden activation layers
-        inputs = tf.reshape(inputs, [-1, embedding_size])
+        inputs = tf.reshape(inputs, [-1, concat_embedding_size])
         # Hidden activation
         #inputs = tf.nn.relu(tf.matmul(inputs, weights['hidden']) + biases['hidden'])
         # Split the inputs to make a list of inputs for the rnn
@@ -165,16 +239,10 @@ with graph.as_default():
 
         with tf.variable_scope('forward'):
             #fw_cell = rnn_cell.BasicLSTMCell(n_hidden, forget_bias=1.0)
-            #lstm1 = rnn_cell.LSTMCell(n_hidden, embedding_size, initializer=initializer)
-            #lstm2 = rnn_cell.LSTMCell(n_hidden, embedding_size, initializer=initializer)
-            #fw_cell = rnn_cell.MultiRNNCell([lstm1, lstm2])
-            fw_cell = rnn_cell.LSTMCell(n_hidden, embedding_size, initializer=initializer)
+            fw_cell = rnn_cell.LSTMCell(n_hidden, concat_embedding_size, initializer=initializer)
         with tf.variable_scope('backward'):
             #bw_cell = rnn_cell.BasicLSTMCell(n_hidden, forget_bias=1.0)
-            #lstm3 = rnn_cell.LSTMCell(n_hidden, embedding_size, initializer=initializer)
-            #lstm4 = rnn_cell.LSTMCell(n_hidden, embedding_size, initializer=initializer)
-            #bw_cell = rnn_cell.MultiRNNCell([lstm3, lstm4])
-            bw_cell = rnn_cell.LSTMCell(n_hidden, embedding_size, initializer=initializer)
+            bw_cell = rnn_cell.LSTMCell(n_hidden, concat_embedding_size, initializer=initializer)
 
         # Get lstm cell output
         outputs,_,_ = rnn.bidirectional_rnn(fw_cell, bw_cell, inputs, dtype="float32", sequence_length=_seq_length)
@@ -226,16 +294,25 @@ with graph.as_default():
 ''' Create a new batch from the training data (data, labels and sequence lengths) '''
 def new_batch (offset):
 
-    train_data = np.empty([batch_size, seq_width, embedding_size], dtype=float)
+    train_data = np.empty([batch_size, seq_width, concat_embedding_size], dtype=float)
     train_labels = np.empty([batch_size, seq_width, n_classes])
     seq_length = np.empty([batch_size])
     batch = train_data_list[offset:(offset+batch_size)]
     for count, sent in enumerate(batch):
         if len(sent) > 50:
             sent = sent[:50]
-        sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
-                       else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+
+        sent_padded = [np.concatenate((embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
+                       else embeddings[word_to_embedding["UNK"]],
+                            suff_embeddings[suff_to_embedding[get_suffix(word).encode("utf8")]] if get_suffix(word).encode("utf8") in suff_embeddings
+                       else suff_embeddings[suff_to_embedding["UNK"]])) for word,_ in sent] \
                       + (seq_width-len(sent)) * [empty_embedding]
+
+        '''
+        sent_padded = [suff_embeddings[suff_to_embedding[get_suffix(word)]] if get_suffix(word) in suff_embeddings
+                       else suff_embeddings[suff_to_embedding["UNK"]] for word,_ in sent] \
+                      + (seq_width-len(sent)) * [empty_embedding]
+        '''
         sent_array = np.asarray(sent_padded)
         train_data[count] = sent_array
         train_labels_sent = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos]
