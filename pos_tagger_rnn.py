@@ -11,7 +11,7 @@ gold_data = "/home/alexander/dev/projects/BAN/pos_tagger_rnn/BTB_pos_gold"
 
 
 ''' Paths to the embeddings model '''
-embeddings_save_path = "/home/alexander/dev/projects/BAN/word-embeddings/model-bg-10-05-wordforms-size200-30iters" # Bulgarian embeddings (wordforms, ~220mil)
+embeddings_save_path = "/home/alexander/dev/projects/BAN/word-embeddings/model-bg-03.05-wordforms" # Bulgarian embeddings (wordforms, ~220mil)
 #embeddings_save_path = "/home/alexander/dev/projects/BAN/word-embeddings/model-en/"
 #embeddings_save_path = "/home/user/dev/neural-pos-tagger/word-embeddings/word-embeddings/model-en/"
 embeddings_train_data = "/home/alexander/dev/projects/BAN/word-embeddings/Corpora_03.05.16/corpus_wordforms.txt"
@@ -27,8 +27,8 @@ batch_size = 128 # Number of sentences passed to the network in one batch
 seq_width = 50 # Max sentence length (longer sentences are cut to this length)
 n_hidden = 100 # Number of features/neurons in the hidden layer
 #n_classes = 12 # Number of tags in the universal tagset in nltk
-n_classes = 153 # Number of tags in BTB corpus
-embedding_size = 200 # Size of the word embedding vectors
+n_classes = 162 # Number of tags in BTB corpus
+embedding_size = 600 # Size of the word embedding vectors
 
 ''' Get the training/validation/test data '''
 if gold_data == "brown":
@@ -212,11 +212,6 @@ with graph.as_default():
         gradients = optimizer.compute_gradients(loss)
         capped_gradients = [(tf.clip_by_value(grad, -1, 1), var) for grad, var in gradients if grad!=None]
         optimizer_t = optimizer.apply_gradients(capped_gradients, global_step=global_step)
-        #optimizer_t = optimizer.apply_gradients(capped_gradients)
-
-
-        # calculate gradients and update model in one step
-        #optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
 
          # Predictions for the training, validation, and test data.
         train_prediction = tf.nn.softmax(logits)
@@ -259,18 +254,6 @@ def accuracy (predictions, labels):
         eval_cases+=1
     return (100.0 * matching_cases) / eval_cases
 
-    '''
-    # for debugging:
-    argmax1 = np.argmax(predictions,1)
-    reshaped_labels = np.reshape(np.transpose(labels, (1,0,2)), (-1,n_classes))
-    argmax2 = np.argmax(reshaped_labels,1)
-    comparison = (argmax1 == argmax2)
-    sum = np.sum(comparison)
-    return (100.0 * sum) / predictions.shape[0]
-    #return (100.0 * np.sum(np.argmax(predictions, 1) == np.argmax(np.reshape(labels, (-1, n_classes)), 1))
-    #        / predictions.shape[0])
-    '''
-
 ''' Run the tensorflow graph '''
 with tf.Session(graph=graph) as session:
     tf.initialize_all_variables().run()
@@ -278,7 +261,6 @@ with tf.Session(graph=graph) as session:
     for step in range(training_iters):
         offset = (step * batch_size) % (len(train_data_list) - batch_size)
         batch_data, batch_labels, batch_seq_length = new_batch(offset)
-        #batch_seq_length = batch_size * [2]
         feed_dict = {tf_train_dataset : batch_data, tf_train_labels : batch_labels, tf_train_seq_length: batch_seq_length}
         _, l, predictions, outputs_tensor = session.run(
           [optimizer_t, loss, train_prediction, _outputs_tensor], feed_dict=feed_dict)

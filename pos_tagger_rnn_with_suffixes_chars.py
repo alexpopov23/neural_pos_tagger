@@ -32,17 +32,23 @@ suff_embeddings_save_path = "/home/alexander/dev/projects/BAN/suffix-embeddings/
 suff_embeddings_train_data = "/home/alexander/dev/projects/BAN/suffix-embeddings/SuffixData.txt"
 suff_embeddings_eval_data = "/home/alexander/dev/projects/BAN/word-embeddings/analogies-en.txt"
 
+''' Paths to the char-embeddings model '''
+char_embeddings_save_path = "/home/alexander/dev/projects/BAN/character-embedding/model-03.05.16_10MilWords"
+char_embeddings_train_data = "/home/alexander/dev/projects/BAN/character-embedding/wikipedia_characters_10milwords_split.txt"
+char_embeddings_eval_data = "/home/alexander/dev/projects/BAN/word-embeddings/analogies.txt"
+
 ''' Network Parameters '''
 learning_rate = 0.3 # Update rate for the weights
 training_iters = 10000 # Number of training steps
 batch_size = 128 # Number of sentences passed to the network in one batch
 seq_width = 50 # Max sentence length (longer sentences are cut to this length)
-n_hidden = 125 # Number of features/neurons in the hidden layer
+n_hidden = 130 # Number of features/neurons in the hidden layer
 #n_classes = 12 # Number of tags in the universal tagset in nltk
 n_classes = 162 # Number of tags in BTB corpus
 word_embedding_size = 200 # Size of the word embedding vector + the suffix embedding vector
 suff_embedding_size = 50
-concat_embedding_size = word_embedding_size + suff_embedding_size
+char_embedding_size = 10
+concat_embedding_size = word_embedding_size + suff_embedding_size + char_embedding_size
 
 
 ''' Get the training/validation/test data '''
@@ -125,8 +131,31 @@ with tf.Graph().as_default(), tf.Session() as session:
     suff_to_embedding = model._word2id
     suff_embeddings = tf.nn.l2_normalize(suff_embeddings, 1).eval()
 
+'''
+Convert characters to embeddings and shape them according to the expected dimensions
+Use word2vec_optimized and load model from stored data
+'''
+char_embeddings = {}
+char_to_embedding = {}
+
+with tf.Graph().as_default(), tf.Session() as session:
+    opts = w2v.Options()
+    opts.train_data = char_embeddings_train_data
+    opts.eval_data = char_embeddings_eval_data
+    opts.save_path = char_embeddings_save_path
+    opts.emb_dim = char_embedding_size
+    model = w2v.Word2Vec(opts, session)
+    ckpt = tf.train.get_checkpoint_state(char_embeddings_save_path)
+    if ckpt and ckpt.model_checkpoint_path:
+        model.saver.restore(session, ckpt.model_checkpoint_path)
+    else:
+        print("No valid checkpoint to reload a model was found!")
+    char_embeddings = session.run(model._w_in)
+    char_to_embedding = model._word2id
+    char_embeddings = tf.nn.l2_normalize(char_embeddings, 1).eval()
+
 ''' Method to format the data to be passed into the network '''
-def format_data(data_list, use_words=True):
+def format_data(data_list):
 
     data = np.empty([len(data_list), seq_width, concat_embedding_size], dtype=float)
     labels = np.empty([len(data_list), seq_width, n_classes])
@@ -135,33 +164,29 @@ def format_data(data_list, use_words=True):
         if len(sent) > 50:
             sent = sent[:50]
         # Create a [seq_width, embedding_size]-shaped array, pad it with empty vectors when necessary
-        ''' use words + suffixes or suffixes only '''
-        if use_words:
-            sent_padded = [np.concatenate((embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
-                           else embeddings[word_to_embedding["UNK"]],
-                                       suff_embeddings[suff_to_embedding[get_suffix(word).encode("utf8")]] if get_suffix(word).encode("utf8") in suff_to_embedding
-                           else suff_embeddings[suff_to_embedding["UNK"]])) for word,_ in sent] \
-                          + (seq_width-len(sent)) * [empty_embedding]
-        else:
-            sent_padded = [suff_embeddings[suff_to_embedding[get_suffix(word).lower().encode("utf8")]] if get_suffix(word).lower().encode("utf8") in suff_to_embedding
-                           else suff_embeddings[suff_to_embedding["UNK"]] for word,_ in sent] \
-                          + (seq_width-len(sent)) * [empty_embedding]
-        ''' For debugging '''
-        '''
         sent_padded = []
         for word,_ in sent:
-            #if word.lower() in word_to_embedding:
-            #    word_embeding = embeddings[word_to_embedding[word.lower()]]
-            #else:
-            #    word_embedding = embeddings[word_to_embedding["UNK"]]
+            if word.lower().encode("utf8") in word_to_embedding:
+                word_embedding = embeddings[word_to_embedding[word.lower().encode("utf8")]]
+            else:
+                word_embedding = embeddings[word_to_embedding["UNK"]]
             if get_suffix(word).lower().encode("utf8") in suff_to_embedding:
                 suffix_embedding = suff_embeddings[suff_to_embedding[get_suffix(word).lower().encode("utf8")]]
             else:
                 suffix_embedding = suff_embeddings[suff_to_embedding["UNK"]]
-            #embedding = np.concatenate((word_embedding, suffix_embedding))
-            sent_padded.append(suffix_embedding)
+            summed_char_embedding = np.zeros(char_embedding_size)
+            for char in word.split():
+                if char.encode("utf8") in char_to_embedding:
+                    char_embedding = char_embeddings[char_to_embedding[char.encode("utf8")]]
+                else:
+                    char_embedding = char_embeddings[char_to_embedding["UNK"]]
+                summed_char_embedding = np.add(summed_char_embedding, char_embedding)
+            word_length = len(word)
+            if word_length > 0:
+                summed_char_embedding = summed_char_embedding/word_length
+            embedding = np.concatenate((word_embedding, suffix_embedding, summed_char_embedding))
+            sent_padded.append(embedding)
         sent_padded += (seq_width-len(sent)) * [empty_embedding]
-        '''
         sent_array = np.asarray(sent_padded)
         data[count] = sent_array
         sent_labels = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos] # Padded vector with POS
@@ -173,10 +198,10 @@ empty_embedding = concat_embedding_size * [0.0] # Empty embedding vector, used f
 empty_pos = n_classes * [0] # Empty one-hot pos representation vector, used for padding
 
 ''' Set up validation data '''
-valid_data, valid_labels, valid_seq_length = format_data(valid_data_list, True)
+valid_data, valid_labels, valid_seq_length = format_data(valid_data_list)
 
 ''' Set up test data '''
-test_data, test_labels, test_seq_length = format_data(test_data_list, True)
+test_data, test_labels, test_seq_length = format_data(test_data_list)
 
 ''' Construct tensorflow graph '''
 graph = tf.Graph()
@@ -277,7 +302,7 @@ with graph.as_default():
 def new_batch (offset):
 
     batch = train_data_list[offset:(offset+batch_size)]
-    train_data, train_labels, seq_length = format_data(batch, True)
+    train_data, train_labels, seq_length = format_data(batch)
     return train_data, train_labels, seq_length
 
 ''' Function to calculate the accuracy on a batch of results and gold labels '''

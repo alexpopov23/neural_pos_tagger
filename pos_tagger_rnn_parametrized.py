@@ -8,23 +8,25 @@ from nltk.corpus import brown
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(version='1.0',description='Train а neural POS tagger')
-    parser.add_argument('-embeddings_model', dest='embeddings', required=True,
+    parser = argparse.ArgumentParser(version='1.0',description='Train a neural POS tagger.')
+    parser.add_argument('-embeddings_model', dest='embeddings_save_path', required=True,
                         help='The path to the pretrained model with the embeddings.')
     parser.add_argument('-embedding_size', dest='embedding_size', required=True,
                         help='Size of the embedding vectors.')
-    parser.add_argument('-embedding_train_data', dest='embeddings_train_data', required=True,
+    parser.add_argument('-embeddings_train_data', dest='embeddings_train_data', required=True,
                         help='The path to the corpus used for training the embeddings.')
-    parser.add_argument('-embedding_eval_data', dest='embeddings_eval_data', required=True,
+    parser.add_argument('-embeddings_eval_data', dest='embeddings_eval_data', required=True,
                         help='The path to the set of analogies used for evaluation of the embeddings.')
-    parser.add_argument('-learning_rate', dest='learning_rate', required=True, default=0.3,
+    parser.add_argument('-learning_rate', dest='learning_rate', required=False, default=0.3,
                         help='How fast should the network learn.')
-    parser.add_argument('-training_iterations', dest='train_iters', required=True, default=10000,
+    parser.add_argument('-training_iterations', dest='training_iters', required=False, default=10000,
                         help='How many iterations should the network train for.')
-    parser.add_argument('-batch_size', dest='batch_size', required=True, default=128,
+    parser.add_argument('-batch_size', dest='batch_size', required=False, default=128,
                         help='Size of the training batches.')
-    parser.add_argument('-n_hidden', dest='n_hidden', required=True, default=100,
+    parser.add_argument('-n_hidden', dest='n_hidden', required=False, default=100,
                         help='Size of the hidden layer.')
+    parser.add_argument('-sequence_width', dest='seq_width', required=False, default=50,
+                        help='Maximum length of a sentence to be passed to the network (the rest is cut off).')
     parser.add_argument('-tagset_size', dest='n_classes', required=True,
                         help='Size of the POS tags in the corpus used for training/testing.')
     parser.add_argument('-gold_data', dest='gold_data', required=True, default="brown",
@@ -36,18 +38,18 @@ if __name__ == "__main__":
     gold_data = args.gold_data
 
     ''' Paths to the embeddings model '''
-    embeddings_save_path = args.gold_data
+    embeddings_save_path = args.embeddings_save_path
     embeddings_train_data = args.embeddings_train_data
-    embeddings_eval_data = args.embeddins_eval_data
+    embeddings_eval_data = args.embeddings_eval_data
 
     ''' Network Parameters '''
-    learning_rate = args.learning_rate # Update rate for the weights
-    training_iters = args.training_iters # Number of training steps
-    batch_size = args.batch_size # Number of sentences passed to the network in one batch
-    seq_width = 50 # Max sentence length (longer sentences are cut to this length)
-    n_hidden = args.n_hidden # Number of features/neurons in the hidden layer
-    n_classes = args.n_classes # Number of tags in the gold corpus
-    embedding_size = args.embedding_size # Size of the word embedding vectors
+    learning_rate = float(args.learning_rate) # Update rate for the weights
+    training_iters = int(args.training_iters) # Number of training steps
+    batch_size = int(args.batch_size) # Number of sentences passed to the network in one batch
+    seq_width = int(args.seq_width) # Max sentence length (longer sentences are cut to this length)
+    n_hidden = int(args.n_hidden) # Number of features/neurons in the hidden layer
+    n_classes = int(args.n_classes) # Number of tags in the gold corpus
+    embedding_size = int(args.embedding_size) # Size of the word embedding vectors
 
     ''' Get the training/validation/test data '''
     if gold_data == "brown":
@@ -103,41 +105,34 @@ if __name__ == "__main__":
         word_to_embedding = model._word2id
         embeddings = tf.nn.l2_normalize(embeddings, 1).eval()
 
+    ''' Method to format the data to be passed into the network '''
+    def format_data(data_list):
+
+        data = np.empty([len(data_list), seq_width, embedding_size], dtype=float)
+        labels = np.empty([len(data_list), seq_width, n_classes])
+        seq_length = np.empty([len(data_list)], dtype=int)
+        for count, sent in enumerate(data_list):
+            if len(sent) > 50:
+                sent = sent[:50]
+            # Create a [seq_width, embedding_size]-shaped array, pad it with empty vectors when necessary
+            sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
+                           else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+                          + (seq_width-len(sent)) * [empty_embedding]
+            sent_array = np.asarray(sent_padded)
+            data[count] = sent_array
+            sent_labels = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos] # Padded vector with POS
+            labels[count] = sent_labels
+            seq_length[count] = len(sent) # Record the length of the sentence, needed for the RNN cell
+        return data, labels, seq_length
+
     empty_embedding = embedding_size * [0.0] # Empty embedding vector, used for padding
     empty_pos = n_classes * [0] # Empty one-hot pos representation vector, used for padding
 
     ''' Set up validation data '''
-    valid_data = np.empty([len(valid_data_list), seq_width, embedding_size], dtype=float)
-    valid_labels = np.empty([len(valid_data_list), seq_width, n_classes])
-    valid_seq_length = np.empty([len(valid_data_list)], dtype=int)
-    for count, sent in enumerate(valid_data_list):
-        if len(sent) > 50:
-            sent = sent[:50]
-        # Create a [seq_width, embedding_size]-shaped array, pad it with empty vectors when necessary
-        sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
-                       else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
-                      + (seq_width-len(sent)) * [empty_embedding]
-        sent_array = np.asarray(sent_padded)
-        valid_data[count] = sent_array
-        sent_labels = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos] # Padded vector with POS
-        valid_labels[count] = sent_labels
-        valid_seq_length[count] = len(sent) # Record the length of the sentence, needed for the RNN cell
+    valid_data, valid_labels, valid_seq_length = format_data(valid_data_list)
 
     ''' Set up test data '''
-    test_data = np.empty([len(test_data_list), seq_width, embedding_size], dtype=float)
-    test_labels = np.empty([len(test_data_list), seq_width, n_classes])
-    test_seq_length = np.empty([len(test_data_list)], dtype=int)
-    for count, sent in enumerate(test_data_list):
-        if len(sent) > 50:
-            sent = sent[:50]
-        sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
-                       else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
-                      + (seq_width-len(sent)) * [empty_embedding]
-        sent_array = np.asarray(sent_padded)
-        test_data[count] = sent_array
-        sent_labels = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos]
-        test_labels[count] = sent_labels
-        test_seq_length[count] = len(sent)
+    test_data, test_labels, test_seq_length = format_data(test_data_list)
 
     ''' Construct tensorflow graph '''
     graph = tf.Graph()
@@ -201,13 +196,6 @@ if __name__ == "__main__":
 
             for i in xrange(len(outputs)):
                 final_transformed_val = tf.matmul(outputs[i],weights['out']) + biases['out']
-                '''
-                # TODO replace with zeroes where sentences are shorter and biases should not be calculated
-                for length in tf_train_seq_length:
-                    tf.shape()
-                    if length <= i:
-                        final_transformed_val[tf_train_seq_length.index(length)] = empty_pos
-                '''
                 logits.append(final_transformed_val)
             logits = tf.reshape(tf.concat(0, logits), [-1, n_classes])
 
@@ -221,19 +209,14 @@ if __name__ == "__main__":
                 logits, tf.reshape(tf.transpose(tf_train_labels, [1,0,2]), [-1, n_classes])))
 
             # try out a decaying learning rate
-            global_step = tf.Variable(0)  # count the number of steps taken.
-            learning_rate = tf.train.exponential_decay(learning_rate, global_step, 3500, 0.86, staircase=True)
+            #global_step = tf.Variable(0)  # count the number of steps taken.
+            #learning_rate = tf.train.exponential_decay(learning_rate, global_step, 3500, 0.86, staircase=True)
 
             # calculate gradients, clip them and update model in separate steps
             optimizer = tf.train.GradientDescentOptimizer(learning_rate)
             gradients = optimizer.compute_gradients(loss)
             capped_gradients = [(tf.clip_by_value(grad, -1, 1), var) for grad, var in gradients if grad!=None]
-            optimizer_t = optimizer.apply_gradients(capped_gradients, global_step=global_step)
-            #optimizer_t = optimizer.apply_gradients(capped_gradients)
-
-
-            # calculate gradients and update model in one step
-            #optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
+            optimizer_t = optimizer.apply_gradients(capped_gradients)
 
              # Predictions for the training, validation, and test data.
             train_prediction = tf.nn.softmax(logits)
@@ -243,21 +226,8 @@ if __name__ == "__main__":
     ''' Create a new batch from the training data (data, labels and sequence lengths) '''
     def new_batch (offset):
 
-        train_data = np.empty([batch_size, seq_width, embedding_size], dtype=float)
-        train_labels = np.empty([batch_size, seq_width, n_classes])
-        seq_length = np.empty([batch_size])
         batch = train_data_list[offset:(offset+batch_size)]
-        for count, sent in enumerate(batch):
-            if len(sent) > 50:
-                sent = sent[:50]
-            sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
-                           else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
-                          + (seq_width-len(sent)) * [empty_embedding]
-            sent_array = np.asarray(sent_padded)
-            train_data[count] = sent_array
-            train_labels_sent = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos]
-            train_labels[count] = train_labels_sent
-            seq_length[count] = len(sent)
+        train_data, train_labels, seq_length = format_data(batch)
         return train_data, train_labels, seq_length
 
     ''' Function to calculate the accuracy on a batch of results and gold labels '''
@@ -276,18 +246,6 @@ if __name__ == "__main__":
             eval_cases+=1
         return (100.0 * matching_cases) / eval_cases
 
-        '''
-        # for debugging:
-        argmax1 = np.argmax(predictions,1)
-        reshaped_labels = np.reshape(np.transpose(labels, (1,0,2)), (-1,n_classes))
-        argmax2 = np.argmax(reshaped_labels,1)
-        comparison = (argmax1 == argmax2)
-        sum = np.sum(comparison)
-        return (100.0 * sum) / predictions.shape[0]
-        #return (100.0 * np.sum(np.argmax(predictions, 1) == np.argmax(np.reshape(labels, (-1, n_classes)), 1))
-        #        / predictions.shape[0])
-        '''
-
     ''' Run the tensorflow graph '''
     with tf.Session(graph=graph) as session:
         tf.initialize_all_variables().run()
@@ -295,7 +253,6 @@ if __name__ == "__main__":
         for step in range(training_iters):
             offset = (step * batch_size) % (len(train_data_list) - batch_size)
             batch_data, batch_labels, batch_seq_length = new_batch(offset)
-            #batch_seq_length = batch_size * [2]
             feed_dict = {tf_train_dataset : batch_data, tf_train_labels : batch_labels, tf_train_seq_length: batch_seq_length}
             _, l, predictions, outputs_tensor = session.run(
               [optimizer_t, loss, train_prediction, _outputs_tensor], feed_dict=feed_dict)
