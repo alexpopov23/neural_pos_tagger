@@ -144,9 +144,10 @@ class Word2Vec(object):
     self._word2id = {}
     self._id2word = []
     self.build_graph()
-    self.build_eval_graph()
-    self.save_vocab()
-    self._read_analogies()
+    ''' Comment these out as they are not necessary for the POS tagger '''
+    #self.build_eval_graph()
+    #self.save_vocab()
+    #self._read_analogies()
 
   def _read_analogies(self):
     """Reads through the analogy question file.
@@ -234,6 +235,9 @@ class Word2Vec(object):
     self.step = global_step
     self._epoch = current_epoch
     self._words = total_words_processed
+
+    ''' Add this line as the initialization of the saver in the original code is in the eval graph method '''
+    self.saver = tf.train.Saver()
 
   def save_vocab(self):
     """Save the vocabulary to a file so the model can be reloaded."""

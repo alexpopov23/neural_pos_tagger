@@ -5,18 +5,31 @@ import BTBReader
 import argparse
 from tensorflow.models.rnn import rnn, rnn_cell
 from nltk.corpus import brown
+from word_to_suffix import get_suffix
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(version='1.0',description='Train a neural POS tagger.')
-    parser.add_argument('-embeddings_model', dest='embeddings_save_path', required=True,
-                        help='The path to the pretrained model with the embeddings.')
-    parser.add_argument('-embedding_size', dest='embedding_size', required=True,
-                        help='Size of the embedding vectors.')
-    parser.add_argument('-embeddings_train_data', dest='embeddings_train_data', required=True,
-                        help='The path to the corpus used for training the embeddings.')
-    parser.add_argument('-embeddings_eval_data', dest='embeddings_eval_data', required=True,
-                        help='The path to the set of analogies used for evaluation of the embeddings.')
+    parser.add_argument('-use_word_embeddings', dest='use_word_embeddings', required=True,
+                        help='State whether word embeddings should be used as input.')
+    parser.add_argument('-word_embeddings_model', dest='word_embeddings_save_path', required=False,
+                        help='The path to the pretrained model with the word embeddings.')
+    parser.add_argument('-word_embedding_size', dest='word_embedding_size', required=False,
+                        help='Size of the word embedding vectors.')
+    parser.add_argument('-word_embeddings_train_data', dest='word_embeddings_train_data', required=False,
+                        help='The path to the corpus used for training the word embeddings.')
+    parser.add_argument('-word_embeddings_eval_data', dest='word_embeddings_eval_data', required=False,
+                        help='The path to the set of analogies used for evaluation of the word embeddings.')
+    parser.add_argument('-use_suffix_embeddings', dest='use_suffix_embeddings', required=True,
+                        help='State whether suffix embeddings should be used as input.')
+    parser.add_argument('-suffix_embeddings_model', dest='suffix_embeddings_save_path', required=False,
+                        help='The path to the pretrained model with the suffix embeddings.')
+    parser.add_argument('-suffix_embedding_size', dest='suffix_embedding_size', required=False,
+                        help='Size of the suffix embedding vectors.')
+    parser.add_argument('-suffix_embeddings_train_data', dest='suffix_embeddings_train_data', required=False,
+                        help='The path to the corpus used for training the suffix embeddings.')
+    parser.add_argument('-suffix_embeddings_eval_data', dest='suffix_embeddings_eval_data', required=False,
+                        help='The path to the set of analogies used for evaluation of the suffix embeddings.')
     parser.add_argument('-learning_rate', dest='learning_rate', required=False, default=0.3,
                         help='How fast should the network learn.')
     parser.add_argument('-training_iterations', dest='training_iters', required=False, default=10000,
@@ -37,10 +50,23 @@ if __name__ == "__main__":
     ''' Path to gold corpus (if set to "brown", use the nltk data) '''
     gold_data = args.gold_data
 
-    ''' Paths to the embeddings model '''
-    embeddings_save_path = args.embeddings_save_path
-    embeddings_train_data = args.embeddings_train_data
-    embeddings_eval_data = args.embeddings_eval_data
+    ''' Parameters of the word embedding model '''
+    if args.use_word_embeddings:
+        word_embeddings_save_path = args.word_embeddings_save_path
+        word_embeddings_train_data = args.word_embeddings_train_data
+        #word_embeddings_eval_data = args.word_embeddings_eval_data
+        word_embedding_size = int(args.word_embedding_size) # Size of the word embedding vectors
+    else:
+        word_embedding_size = 0
+
+    ''' Parameters of the suffix embedding model '''
+    if args.use_suffix_embeddings:
+        suffix_embeddings_save_path = args.suffix_embeddings_save_path
+        suffix_embeddings_train_data = args.suffix_embeddings_train_data
+        #suffix_embeddings_eval_data = args.suffix_embeddings_eval_data
+        suffix_embedding_size = int(args.suffix_embedding_size) # Size of the suffix embedding vectors
+    else:
+        suffix_embedding_size = 0
 
     ''' Network Parameters '''
     learning_rate = float(args.learning_rate) # Update rate for the weights
@@ -49,15 +75,16 @@ if __name__ == "__main__":
     seq_width = int(args.seq_width) # Max sentence length (longer sentences are cut to this length)
     n_hidden = int(args.n_hidden) # Number of features/neurons in the hidden layer
     n_classes = int(args.n_classes) # Number of tags in the gold corpus
-    embedding_size = int(args.embedding_size) # Size of the word embedding vectors
+    embedding_size = word_embedding_size + suffix_embedding_size
+    if embedding_size == 0:
+        print "No embedding model given as parameter!"
+        exit(1)
 
     ''' Get the training/validation/test data '''
     if gold_data == "brown":
         data = brown.tagged_sents(tagset='universal') # Get the Brown POS-tagged corpus from nltk
     else:
         data, pos_tags = BTBReader.get_tagged_sentences(gold_data, True, False)
-    #random.shuffle(data)
-    print len(pos_tags)
     #valid_data_list = sorted(data[:5000], key=len) # Optionally, sort the sentences by length
     valid_data_list = data[:3500]
     #test_data_list = sorted(data[5000:10000], key=len)
@@ -65,11 +92,12 @@ if __name__ == "__main__":
     #train_data_list = sorted(data[10000:], key=len)
     train_data_list = data[7000:]
 
+    print "Number of labels in the tagset is " + str(len(pos_tags))
     print "Length of the full data is " + str(len(data))
     print "Length of validation data is " + str(len(valid_data_list))
     print "Length of test data is " + str(len(test_data_list))
     print "Length of training data is " + str(len(train_data_list))
-    print "Some examples from the training data: " + str(train_data_list[0:10])
+    #print "Some examples from the training data: " + str(train_data_list[0:10])
 
     ''' Encode the POS tags as one-hot vectors '''
     pos_dict = {}
@@ -82,28 +110,53 @@ if __name__ == "__main__":
         one_hot_pos[labels.index(label)] = 1
         pos_dict[label] = one_hot_pos
 
-    embeddings = {} # Dictionary to store the normalize embeddings; keys are integers from 0 to len(vocabulary)
-    word_to_embedding = {} # Dictionary for the mapping between word strings and corresponding integers
+    if args.use_word_embeddings:
+        embeddings = {} # Dictionary to store the normalize embeddings; keys are integers from 0 to len(vocabulary)
+        word_to_embedding = {} # Dictionary for the mapping between word strings and corresponding integers
 
-    '''
-    Convert words to embeddings and shape them according to the expected dimensions
-    Use word2vec_optimized and load model from stored data
-    '''
-    with tf.Graph().as_default(), tf.Session() as session:
-        opts = w2v.Options()
-        opts.train_data = embeddings_train_data
-        opts.eval_data = embeddings_eval_data
-        opts.save_path = embeddings_save_path
-        opts.emb_dim = embedding_size
-        model = w2v.Word2Vec(opts, session)
-        ckpt = tf.train.get_checkpoint_state(embeddings_save_path)
-        if ckpt and ckpt.model_checkpoint_path:
-            model.saver.restore(session, ckpt.model_checkpoint_path)
-        else:
-            print("No valid checkpoint to reload a model was found!")
-        embeddings = session.run(model._w_in)
-        word_to_embedding = model._word2id
-        embeddings = tf.nn.l2_normalize(embeddings, 1).eval()
+        '''
+        Convert words to embeddings and shape them according to the expected dimensions
+        Use word2vec_optimized and load model from stored data
+        '''
+        with tf.Graph().as_default(), tf.Session() as session:
+            opts = w2v.Options()
+            opts.train_data = word_embeddings_train_data
+            #opts.eval_data = word_embeddings_eval_data
+            opts.save_path = word_embeddings_save_path
+            opts.emb_dim = word_embedding_size
+            model = w2v.Word2Vec(opts, session)
+            ckpt = tf.train.get_checkpoint_state(word_embeddings_save_path)
+            if ckpt and ckpt.model_checkpoint_path:
+                model.saver.restore(session, ckpt.model_checkpoint_path)
+            else:
+                print("No valid checkpoint to reload a model was found!")
+            embeddings = session.run(model._w_in)
+            word_to_embedding = model._word2id
+            embeddings = tf.nn.l2_normalize(embeddings, 1).eval()
+    if args.use_suffix_embeddings:
+        suff_embeddings = {}
+        suff_to_embedding = {}
+
+        '''
+        Convert suffixes to embeddings and shape them according to the expected dimensions
+        Use word2vec_optimized and load model from stored data
+        '''
+
+        with tf.Graph().as_default(), tf.Session() as session:
+            opts = w2v.Options()
+            opts.train_data = suffix_embeddings_train_data
+            #opts.eval_data = suffix_embeddings_eval_data
+            opts.save_path = suffix_embeddings_save_path
+            opts.emb_dim = suffix_embedding_size
+            model = w2v.Word2Vec(opts, session)
+            ckpt = tf.train.get_checkpoint_state(suffix_embeddings_save_path)
+            if ckpt and ckpt.model_checkpoint_path:
+                model.saver.restore(session, ckpt.model_checkpoint_path)
+            else:
+                print("No valid checkpoint to reload a model was found!")
+            suff_embeddings = session.run(model._w_in)
+            suff_to_embedding = model._word2id
+            suff_embeddings = tf.nn.l2_normalize(suff_embeddings, 1).eval()
 
     ''' Method to format the data to be passed into the network '''
     def format_data(data_list):
@@ -114,10 +167,22 @@ if __name__ == "__main__":
         for count, sent in enumerate(data_list):
             if len(sent) > 50:
                 sent = sent[:50]
-            # Create a [seq_width, embedding_size]-shaped array, pad it with empty vectors when necessary
-            sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
-                           else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
-                          + (seq_width-len(sent)) * [empty_embedding]
+            ''' Create a [seq_width, embedding_size]-shaped array, pad it with empty vectors when necessary '''
+            ''' construct the sentence representation depending on the selected embedding model '''
+            if args.use_word_embeddings and args.use_suffix_embeddings:
+                sent_padded = [np.concatenate((embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
+                               else embeddings[word_to_embedding["UNK"]],
+                                           suff_embeddings[suff_to_embedding[get_suffix(word).encode("utf8")]] if get_suffix(word).encode("utf8") in suff_to_embedding
+                               else suff_embeddings[suff_to_embedding["UNK"]])) for word,_ in sent] \
+                              + (seq_width-len(sent)) * [empty_embedding]
+            elif args.use_word_embeddings:
+                sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
+                               else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
+                              + (seq_width-len(sent)) * [empty_embedding]
+            elif args.use_suffix_embeddings:
+                sent_padded = [suff_embeddings[suff_to_embedding[get_suffix(word).lower().encode("utf8")]] if get_suffix(word).lower().encode("utf8") in suff_to_embedding
+                               else suff_embeddings[suff_to_embedding["UNK"]] for word,_ in sent] \
+                              + (seq_width-len(sent)) * [empty_embedding]
             sent_array = np.asarray(sent_padded)
             data[count] = sent_array
             sent_labels = [pos_dict[label] for _,label in sent] + (seq_width-len(sent)) * [empty_pos] # Padded vector with POS
