@@ -31,6 +31,8 @@ def get_tagged_sentences(input_folder, use_medium_coarse_tagset=False, use_coars
     files = os.listdir(input_folder)
     for f_name in files:
         f = open(os.path.join(input_folder, f_name), "r")
+        # remove the .encode/.decode part for NER/POS
+        #text = f.read().decode("cp1251")#.encode("utf8")
         text = f.read().decode("utf8")
         sentences = text.split("##")
         for sentence in sentences:
@@ -44,8 +46,8 @@ def get_tagged_sentences(input_folder, use_medium_coarse_tagset=False, use_coars
                 tag = tag.strip()
                 if (use_medium_coarse_tagset or use_coarsest_tagset) and tag in tag_map_dict:
                     tag = tag_map_dict[tag]
-                else:
-                    tag = tag[0]
+                #else:
+                #    tag = tag[0]
                 tagged_sentence.append((word, tag))
                 pos_tags.add(tag)
             tagged_sentences.append(tagged_sentence)

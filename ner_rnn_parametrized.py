@@ -6,8 +6,6 @@ import argparse
 from tensorflow.models.rnn import rnn, rnn_cell
 from nltk.corpus import brown
 from word_to_suffix import get_suffix
-import morphological_dictionary
-from constants import VECTOR_POSITIONS
 
 
 if __name__ == "__main__":
@@ -32,10 +30,6 @@ if __name__ == "__main__":
                         help='The path to the corpus used for training the suffix embeddings.')
     parser.add_argument('-suffix_embeddings_eval_data', dest='suffix_embeddings_eval_data', required=False,
                         help='The path to the set of analogies used for evaluation of the suffix embeddings.')
-    parser.add_argument('-use_morphodict', dest='use_morphodict', required=False, default=False,
-                        help='State whether a morphological dictionary should be used to determine ambiguities.')
-    parser.add_argument('-path_to_dict', dest='path_to_dict', required=False,
-                        help='The path to the morphological dictionary.')
     parser.add_argument('-learning_rate', dest='learning_rate', required=False, default=0.3,
                         help='How fast should the network learn.')
     parser.add_argument('-training_iterations', dest='training_iters', required=False, default=10000,
@@ -82,8 +76,6 @@ if __name__ == "__main__":
     n_hidden = int(args.n_hidden) # Number of features/neurons in the hidden layer
     n_classes = int(args.n_classes) # Number of tags in the gold corpus
     embedding_size = word_embedding_size + suffix_embedding_size
-    if args.use_morphodict:
-        embedding_size += VECTOR_POSITIONS
     if embedding_size == 0:
         print "No embedding model given as parameter!"
         exit(1)
@@ -94,12 +86,13 @@ if __name__ == "__main__":
     else:
         data, pos_tags = BTBReader.get_tagged_sentences(gold_data, False, False)
     #valid_data_list = sorted(data[:5000], key=len) # Optionally, sort the sentences by length
-    valid_data_list = data[:3500]
+    valid_data_list = data[:1000]
     #test_data_list = sorted(data[5000:10000], key=len)
-    test_data_list = data[3500:7000]
+    test_data_list = data[1000:2000]
     #train_data_list = sorted(data[10000:], key=len)
-    train_data_list = data[7000:]
+    train_data_list = data[2000:]
 
+    print "POS tags " + str(pos_tags)
     print "Number of labels in the tagset is " + str(len(pos_tags))
     print "Length of the full data is " + str(len(data))
     print "Length of validation data is " + str(len(valid_data_list))
@@ -109,11 +102,14 @@ if __name__ == "__main__":
 
     ''' Encode the POS tags as one-hot vectors '''
     pos_dict = {}
+    outside_ner = 0
     if gold_data == "brown":
         labels = ['ADJ', 'ADP', 'ADV', 'CONJ', 'DET', 'NOUN', 'NUM', 'PRT', 'PRON', 'VERB', '.', 'X']
     else:
         labels = list(pos_tags)
     for label in labels:
+        if label == "O":
+            outside_ner = labels.index(label)
         one_hot_pos = np.zeros([n_classes], dtype=int)
         one_hot_pos[labels.index(label)] = 1
         pos_dict[label] = one_hot_pos
@@ -166,12 +162,6 @@ if __name__ == "__main__":
             suff_to_embedding = model._word2id
             suff_embeddings = tf.nn.l2_normalize(suff_embeddings, 1).eval()
 
-    if args.use_morphodict:
-        if args.path_to_dict == False:
-            print "No path to the morphological dictionary is provided."
-        morpho_dict = morphological_dictionary.get_morpho_dict(args.path_to_dict)
-        tag_to_vector = morphological_dictionary.get_tag_to_vector()
-
     ''' Method to format the data to be passed into the network '''
     def format_data(data_list):
 
@@ -183,27 +173,7 @@ if __name__ == "__main__":
                 sent = sent[:50]
             ''' Create a [seq_width, embedding_size]-shaped array, pad it with empty vectors when necessary '''
             ''' construct the sentence representation depending on the selected embedding model '''
-
-            # If the morphological dictionary should be used, concatenate feature vectors to embeddings
-            if args.use_morphodict:
-                sent_padded = []
-                for word,_ in sent:
-                    morpho_features = morphological_dictionary.get_morpho_feats(word.lower().encode("utf8"), morpho_dict, tag_to_vector)
-                if args.use_word_embeddings and args.use_suffix_embeddings:
-                    sent_padded.append(np.concatenate((embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
-                                   else embeddings[word_to_embedding["UNK"]],
-                                               suff_embeddings[suff_to_embedding[get_suffix(word).encode("utf8")]] if get_suffix(word).encode("utf8") in suff_to_embedding
-                                   else suff_embeddings[suff_to_embedding["UNK"]],
-                                    morpho_features)))
-                elif args.use_word_embeddings:
-                    sent_padded.append(np.concatenate((embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
-                                   else embeddings[word_to_embedding["UNK"]], morpho_features)))
-                elif args.use_suffix_embeddings:
-                    sent_padded.append(np.concatenate((suff_embeddings[suff_to_embedding[get_suffix(word).lower().encode("utf8")]] if get_suffix(word).lower().encode("utf8") in suff_to_embedding
-                                   else suff_embeddings[suff_to_embedding["UNK"]], morpho_features)))
-                sent_padded += (seq_width-len(sent)) * [empty_embedding]
-            # Else, use just the word/suffix embeddings
-            elif args.use_word_embeddings and args.use_suffix_embeddings:
+            if args.use_word_embeddings and args.use_suffix_embeddings:
                 sent_padded = [np.concatenate((embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
                                else embeddings[word_to_embedding["UNK"]],
                                            suff_embeddings[suff_to_embedding[get_suffix(word).encode("utf8")]] if get_suffix(word).encode("utf8") in suff_to_embedding
@@ -332,18 +302,39 @@ if __name__ == "__main__":
     ''' Function to calculate the accuracy on a batch of results and gold labels '''
     def accuracy (predictions, labels):
 
+        '''
+        Precision = True Positives / (True Positives + False Positives)
+        Recall = True Positives / (True Positives + False Negatives)
+        F-1 = 2 * (Precision * Recall) / (Precision + Recall)
+        '''
         reshaped_labels = np.reshape(np.transpose(labels, (1,0,2)), (-1,n_classes))
         matching_cases = 0
         eval_cases = 0
+        false_positives = 0.0
+        false_negatives = 0.0
+        true_positives = 0.0
         # Do not count results beyond the end of a sentence (in the case of sentences shorter than 50 words)
         for i in xrange(reshaped_labels.shape[0]):
             # If all values in a gold POS label are zeros, skip this calculation
             if max(reshaped_labels[i]) == 0:
                 continue
+            # If label is "O", disregard true positives but count false positives
+            if reshaped_labels[i][outside_ner] == 1:
+                if max(predictions[i]) != outside_ner:
+                    false_positives+=1
+                    continue
             if np.argmax(reshaped_labels[i]) == np.argmax(predictions[i]):
-                matching_cases+=1
+                true_positives+=1
+            else:
+                false_negatives+=1
             eval_cases+=1
-        return (100.0 * matching_cases) / eval_cases
+        precision = true_positives / (true_positives + false_positives)
+        recall = true_positives / (true_positives + false_negatives)
+        if precision == 0 and recall == 0:
+            f1 = 0
+        else:
+            f1 = 2 * (precision * recall) / (precision + recall)
+        return precision, recall, f1
 
     ''' Run the tensorflow graph '''
     with tf.Session(graph=graph) as session:
@@ -357,7 +348,12 @@ if __name__ == "__main__":
               [optimizer_t, loss, train_prediction, _outputs_tensor], feed_dict=feed_dict)
             if (step % 50 == 0):
               print 'Minibatch loss at step ' + str(step) + ': ' + str(l)
-              print 'Minibatch accuracy: ' + str(accuracy(predictions, batch_labels))
-              print 'Validation accuracy: ' + str(accuracy(
-                valid_prediction.eval(), valid_labels))
-        print 'Test accuracy: ' + str(accuracy(test_prediction.eval(), test_labels))
+              min_prec, min_rec, min_f1 = accuracy(predictions, batch_labels)
+              print 'Minibatch precision: ' + str(min_prec)[:4] + '; minibatch recall: ' + str(min_rec)[:4]\
+                    + '; minibatch f-1: ' + str(min_f1)[:4]
+              val_prec, val_rec, val_f1 = accuracy(valid_prediction.eval(), valid_labels)
+              print 'Validation precision: ' + str(val_prec)[:4] + '; validation recall: ' + str(val_rec)[:4]\
+                    + '; validation f-1: ' + str(val_f1)[:4]
+        test_prec, test_rec, test_f1 = accuracy(test_prediction.eval(), test_labels)
+        print 'Test precision: ' + str(test_prec)[:4] + '; test recall: ' + str(test_rec)[:4] \
+              + '; test f-1: ' + str(test_f1)[:4]
