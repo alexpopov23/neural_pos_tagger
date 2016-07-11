@@ -32,6 +32,8 @@ if __name__ == "__main__":
                         help='The path to the corpus used for training the suffix embeddings.')
     parser.add_argument('-suffix_embeddings_eval_data', dest='suffix_embeddings_eval_data', required=False,
                         help='The path to the set of analogies used for evaluation of the suffix embeddings.')
+    parser.add_argument('-use_lemma_embeddings', dest='use_lemma_embeddings', required=True,
+                        help='State whether lemma embeddings should be used as input')
     parser.add_argument('-use_morphodict', dest='use_morphodict', required=False, default=False,
                         help='State whether a morphological dictionary should be used to determine ambiguities.')
     parser.add_argument('-path_to_dict', dest='path_to_dict', required=False,
@@ -57,7 +59,7 @@ if __name__ == "__main__":
     gold_data = args.gold_data
 
     ''' Parameters of the word embedding model '''
-    if args.use_word_embeddings:
+    if args.use_word_embeddings == 'True':
         word_embeddings_save_path = args.word_embeddings_save_path
         word_embeddings_train_data = args.word_embeddings_train_data
         #word_embeddings_eval_data = args.word_embeddings_eval_data
@@ -66,7 +68,7 @@ if __name__ == "__main__":
         word_embedding_size = 0
 
     ''' Parameters of the suffix embedding model '''
-    if args.use_suffix_embeddings:
+    if args.use_suffix_embeddings == 'True':
         suffix_embeddings_save_path = args.suffix_embeddings_save_path
         suffix_embeddings_train_data = args.suffix_embeddings_train_data
         #suffix_embeddings_eval_data = args.suffix_embeddings_eval_data
@@ -82,7 +84,7 @@ if __name__ == "__main__":
     n_hidden = int(args.n_hidden) # Number of features/neurons in the hidden layer
     n_classes = int(args.n_classes) # Number of tags in the gold corpus
     embedding_size = word_embedding_size + suffix_embedding_size
-    if args.use_morphodict:
+    if args.use_morphodict == 'True':
         embedding_size += VECTOR_POSITIONS
     if embedding_size == 0:
         print "No embedding model given as parameter!"
@@ -92,7 +94,7 @@ if __name__ == "__main__":
     if gold_data == "brown":
         data = brown.tagged_sents(tagset='universal') # Get the Brown POS-tagged corpus from nltk
     else:
-        data, pos_tags = BTBReader.get_tagged_sentences(gold_data, False, False)
+        data, pos_tags = BTBReader.get_tagged_sentences(gold_data, True, False)
     #valid_data_list = sorted(data[:5000], key=len) # Optionally, sort the sentences by length
     valid_data_list = data[:3500]
     #test_data_list = sorted(data[5000:10000], key=len)
@@ -118,7 +120,7 @@ if __name__ == "__main__":
         one_hot_pos[labels.index(label)] = 1
         pos_dict[label] = one_hot_pos
 
-    if args.use_word_embeddings:
+    if args.use_word_embeddings == 'True':
         embeddings = {} # Dictionary to store the normalize embeddings; keys are integers from 0 to len(vocabulary)
         word_to_embedding = {} # Dictionary for the mapping between word strings and corresponding integers
 
@@ -141,7 +143,7 @@ if __name__ == "__main__":
             embeddings = session.run(model._w_in)
             word_to_embedding = model._word2id
             embeddings = tf.nn.l2_normalize(embeddings, 1).eval()
-    if args.use_suffix_embeddings:
+    if args.use_suffix_embeddings == 'True':
         suff_embeddings = {}
         suff_to_embedding = {}
 
@@ -166,11 +168,38 @@ if __name__ == "__main__":
             suff_to_embedding = model._word2id
             suff_embeddings = tf.nn.l2_normalize(suff_embeddings, 1).eval()
 
-    if args.use_morphodict:
+    if args.use_morphodict == 'True':
         if args.path_to_dict == False:
             print "No path to the morphological dictionary is provided."
         morpho_dict = morphological_dictionary.get_morpho_dict(args.path_to_dict)
         tag_to_vector = morphological_dictionary.get_tag_to_vector()
+    elif args.use_lemma_embeddings == 'True':
+        if args.path_to_dict == False:
+            print "No path to the morphological dictionary is provided."
+        morpho_dict = morphological_dictionary.get_morpho_dict(args.path_to_dict)
+
+    ''' Method to calculate the mean vector of several possible lemma representations for a word-form'''
+    def calculate_mean_vector(word):
+        final_lemma = np.zeros(embedding_size)
+        if word in morpho_dict:
+            lemma_pos_list = morpho_dict[word]
+            if len(lemma_pos_list) > 0:
+                num_lemmas = len(lemma_pos_list)
+                for lemma,_ in lemma_pos_list:
+                    #lemma = lemma.lower.encode('utf8')
+                    if lemma in word_to_embedding:
+                        final_lemma = np.add(final_lemma, embeddings[word_to_embedding[lemma]])
+                    else:
+                        num_lemmas-=1
+                if num_lemmas > 0:
+                    final_lemma = final_lemma/num_lemmas
+                else:
+                    final_lemma = embeddings[word_to_embedding["UNK"]]
+            else:
+                final_lemma = embeddings[word_to_embedding["UNK"]]
+        else:
+            final_lemma = embeddings[word_to_embedding["UNK"]]
+        return final_lemma
 
     ''' Method to format the data to be passed into the network '''
     def format_data(data_list):
@@ -185,35 +214,39 @@ if __name__ == "__main__":
             ''' construct the sentence representation depending on the selected embedding model '''
 
             # If the morphological dictionary should be used, concatenate feature vectors to embeddings
-            if args.use_morphodict:
+            if args.use_morphodict == 'True':
                 sent_padded = []
                 for word,_ in sent:
                     morpho_features = morphological_dictionary.get_morpho_feats(word.lower().encode("utf8"), morpho_dict, tag_to_vector)
-                if args.use_word_embeddings and args.use_suffix_embeddings:
+                if args.use_word_embeddings == 'True' and args.use_suffix_embeddings == 'True':
                     sent_padded.append(np.concatenate((embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
                                    else embeddings[word_to_embedding["UNK"]],
                                                suff_embeddings[suff_to_embedding[get_suffix(word).encode("utf8")]] if get_suffix(word).encode("utf8") in suff_to_embedding
                                    else suff_embeddings[suff_to_embedding["UNK"]],
                                     morpho_features)))
-                elif args.use_word_embeddings:
+                elif args.use_word_embeddings == 'True':
                     sent_padded.append(np.concatenate((embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
                                    else embeddings[word_to_embedding["UNK"]], morpho_features)))
-                elif args.use_suffix_embeddings:
+                elif args.use_suffix_embeddings == 'True':
                     sent_padded.append(np.concatenate((suff_embeddings[suff_to_embedding[get_suffix(word).lower().encode("utf8")]] if get_suffix(word).lower().encode("utf8") in suff_to_embedding
                                    else suff_embeddings[suff_to_embedding["UNK"]], morpho_features)))
                 sent_padded += (seq_width-len(sent)) * [empty_embedding]
+            # If we use lemma embeddings, we need to calculate the mean vectors for the alternative lemmas for the word-forms
+            elif args.use_lemma_embeddings == 'True':
+                sent_padded = [calculate_mean_vector(word.lower().encode("utf8")) for word,_ in sent] \
+                              + (seq_width-len(sent)) * [empty_embedding]
             # Else, use just the word/suffix embeddings
-            elif args.use_word_embeddings and args.use_suffix_embeddings:
+            elif args.use_word_embeddings == 'True' and args.use_suffix_embeddings == 'True':
                 sent_padded = [np.concatenate((embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
                                else embeddings[word_to_embedding["UNK"]],
                                            suff_embeddings[suff_to_embedding[get_suffix(word).encode("utf8")]] if get_suffix(word).encode("utf8") in suff_to_embedding
                                else suff_embeddings[suff_to_embedding["UNK"]])) for word,_ in sent] \
                               + (seq_width-len(sent)) * [empty_embedding]
-            elif args.use_word_embeddings:
+            elif args.use_word_embeddings == 'True':
                 sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
                                else embeddings[word_to_embedding["UNK"]] for word,_ in sent] \
                               + (seq_width-len(sent)) * [empty_embedding]
-            elif args.use_suffix_embeddings:
+            elif args.use_suffix_embeddings == 'True':
                 sent_padded = [suff_embeddings[suff_to_embedding[get_suffix(word).lower().encode("utf8")]] if get_suffix(word).lower().encode("utf8") in suff_to_embedding
                                else suff_embeddings[suff_to_embedding["UNK"]] for word,_ in sent] \
                               + (seq_width-len(sent)) * [empty_embedding]
