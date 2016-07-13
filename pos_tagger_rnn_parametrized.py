@@ -34,6 +34,12 @@ if __name__ == "__main__":
                         help='The path to the set of analogies used for evaluation of the suffix embeddings.')
     parser.add_argument('-use_lemma_embeddings', dest='use_lemma_embeddings', required=True,
                         help='State whether lemma embeddings should be used as input')
+    parser.add_argument('-lemma_embeddings_model', dest='lemma_embeddings_save_path', required=False,
+                        help='The path to the pretrained model with the lemma embeddings.')
+    parser.add_argument('-lemma_embedding_size', dest='lemma_embedding_size', required=False,
+                        help='Size of the lemma embedding vectors.')
+    parser.add_argument('-lemma_embeddings_train_data', dest='lemma_embeddings_train_data', required=False,
+                        help='The path to the corpus used for training the lemma embeddings.')
     parser.add_argument('-use_morphodict', dest='use_morphodict', required=False, default=False,
                         help='State whether a morphological dictionary should be used to determine ambiguities.')
     parser.add_argument('-path_to_dict', dest='path_to_dict', required=False,
@@ -76,6 +82,12 @@ if __name__ == "__main__":
     else:
         suffix_embedding_size = 0
 
+    if args.use_lemma_embeddings == "True":
+        lemma_embeddings_save_path = args.lemma_embeddings_save_path
+        lemma_embeddings_train_data = args.lemma_embeddings_train_data
+        #lemma_embeddings_eval_data = args.lemma_embeddings_eval_data
+        lemma_embedding_size = int(args.lemma_embedding_size) # Size of the suffix embedding vectors
+
     ''' Network Parameters '''
     learning_rate = float(args.learning_rate) # Update rate for the weights
     training_iters = int(args.training_iters) # Number of training steps
@@ -83,7 +95,7 @@ if __name__ == "__main__":
     seq_width = int(args.seq_width) # Max sentence length (longer sentences are cut to this length)
     n_hidden = int(args.n_hidden) # Number of features/neurons in the hidden layer
     n_classes = int(args.n_classes) # Number of tags in the gold corpus
-    embedding_size = word_embedding_size + suffix_embedding_size
+    embedding_size = word_embedding_size + suffix_embedding_size + lemma_embedding_size
     if args.use_morphodict == 'True':
         embedding_size += VECTOR_POSITIONS
     if embedding_size == 0:
@@ -178,27 +190,52 @@ if __name__ == "__main__":
             print "No path to the morphological dictionary is provided."
         morpho_dict = morphological_dictionary.get_morpho_dict(args.path_to_dict)
 
+        lemma_embeddings = {}
+        lemma_to_embedding = {}
+
+        '''
+        Convert lemmas to embeddings and shape them according to the expected dimensions
+        Use word2vec_optimized and load model from stored data
+        '''
+
+        with tf.Graph().as_default(), tf.Session() as session:
+            opts = w2v.Options()
+            opts.train_data = lemma_embeddings_train_data
+            #opts.eval_data = lemma_embeddings_eval_data
+            opts.save_path = lemma_embeddings_save_path
+            opts.emb_dim = lemma_embedding_size
+            model = w2v.Word2Vec(opts, session)
+            ckpt = tf.train.get_checkpoint_state(lemma_embeddings_save_path)
+            if ckpt and ckpt.model_checkpoint_path:
+                model.saver.restore(session, ckpt.model_checkpoint_path)
+            else:
+                print("No valid checkpoint to reload a model was found!")
+            lemma_embeddings = session.run(model._w_in)
+            lemma_to_embedding = model._word2id
+            lemma_embeddings = tf.nn.l2_normalize(lemma_embeddings, 1).eval()
+
+
     ''' Method to calculate the mean vector of several possible lemma representations for a word-form'''
     def calculate_mean_vector(word):
-        final_lemma = np.zeros(embedding_size)
+        final_lemma = np.zeros(lemma_embedding_size)
         if word in morpho_dict:
             lemma_pos_list = morpho_dict[word]
             if len(lemma_pos_list) > 0:
                 num_lemmas = len(lemma_pos_list)
                 for lemma,_ in lemma_pos_list:
                     #lemma = lemma.lower.encode('utf8')
-                    if lemma in word_to_embedding:
-                        final_lemma = np.add(final_lemma, embeddings[word_to_embedding[lemma]])
+                    if lemma in lemma_to_embedding:
+                        final_lemma = np.add(final_lemma, lemma_embeddings[lemma_to_embedding[lemma]])
                     else:
                         num_lemmas-=1
                 if num_lemmas > 0:
                     final_lemma = final_lemma/num_lemmas
                 else:
-                    final_lemma = embeddings[word_to_embedding["UNK"]]
+                    final_lemma = default_embedding
             else:
-                final_lemma = embeddings[word_to_embedding["UNK"]]
+                final_lemma = lemma_embeddings[lemma_to_embedding["UNK"]]
         else:
-            final_lemma = embeddings[word_to_embedding["UNK"]]
+            final_lemma = lemma_embeddings[lemma_to_embedding["UNK"]]
         return final_lemma
 
     ''' Method to format the data to be passed into the network '''
@@ -231,16 +268,18 @@ if __name__ == "__main__":
                     sent_padded.append(np.concatenate((suff_embeddings[suff_to_embedding[get_suffix(word).lower().encode("utf8")]] if get_suffix(word).lower().encode("utf8") in suff_to_embedding
                                    else suff_embeddings[suff_to_embedding["UNK"]], morpho_features)))
                 sent_padded += (seq_width-len(sent)) * [empty_embedding]
-            # If we use lemma embeddings, we need to calculate the mean vectors for the alternative lemmas for the word-forms
-            elif args.use_lemma_embeddings == 'True':
-                sent_padded = [calculate_mean_vector(word.lower().encode("utf8")) for word,_ in sent] \
-                              + (seq_width-len(sent)) * [empty_embedding]
-            # Else, use just the word/suffix embeddings
+            # Else, use just the word/suffix/lemma embeddings
             elif args.use_word_embeddings == 'True' and args.use_suffix_embeddings == 'True':
                 sent_padded = [np.concatenate((embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
                                else embeddings[word_to_embedding["UNK"]],
                                            suff_embeddings[suff_to_embedding[get_suffix(word).encode("utf8")]] if get_suffix(word).encode("utf8") in suff_to_embedding
                                else suff_embeddings[suff_to_embedding["UNK"]])) for word,_ in sent] \
+                              + (seq_width-len(sent)) * [empty_embedding]
+            # Use word + lemma embeddings (lemmas could be WordNet-generated)
+            elif args.use_word_embeddings == 'True' and args.use_lemma_embeddings == 'True':
+                sent_padded = [np.concatenate((embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
+                               else embeddings[word_to_embedding["UNK"]],
+                                           calculate_mean_vector(word.lower().encode("utf8")))) for word,_ in sent] \
                               + (seq_width-len(sent)) * [empty_embedding]
             elif args.use_word_embeddings == 'True':
                 sent_padded = [embeddings[word_to_embedding[word.lower().encode("utf8")]] if word.lower().encode("utf8") in word_to_embedding
@@ -249,6 +288,10 @@ if __name__ == "__main__":
             elif args.use_suffix_embeddings == 'True':
                 sent_padded = [suff_embeddings[suff_to_embedding[get_suffix(word).lower().encode("utf8")]] if get_suffix(word).lower().encode("utf8") in suff_to_embedding
                                else suff_embeddings[suff_to_embedding["UNK"]] for word,_ in sent] \
+                              + (seq_width-len(sent)) * [empty_embedding]
+            # If we use lemma embeddings, we need to calculate the mean vectors for the alternative lemmas for the word-forms
+            elif args.use_lemma_embeddings == 'True':
+                sent_padded = [calculate_mean_vector(word.lower().encode("utf8")) for word,_ in sent] \
                               + (seq_width-len(sent)) * [empty_embedding]
             sent_array = np.asarray(sent_padded)
             data[count] = sent_array
@@ -259,6 +302,7 @@ if __name__ == "__main__":
 
     empty_embedding = embedding_size * [0.0] # Empty embedding vector, used for padding
     empty_pos = n_classes * [0] # Empty one-hot pos representation vector, used for padding
+    default_embedding = lemma_embedding_size * [0.5] # default embedding (e.g. for function words not in vocab)
 
     ''' Set up validation data '''
     valid_data, valid_labels, valid_seq_length = format_data(valid_data_list)
