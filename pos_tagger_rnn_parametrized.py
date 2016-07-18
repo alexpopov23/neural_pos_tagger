@@ -229,9 +229,9 @@ if __name__ == "__main__":
                     else:
                         num_lemmas-=1
                 if num_lemmas > 0:
-                    final_lemma = final_lemma/num_lemmas
+                    final_lemma = final_lemma#/num_lemmas
                 else:
-                    final_lemma = default_embedding
+                    final_lemma = lemma_embeddings[lemma_to_embedding["UNK"]]#default_embedding
             else:
                 final_lemma = lemma_embeddings[lemma_to_embedding["UNK"]]
         else:
